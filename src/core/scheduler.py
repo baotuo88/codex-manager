@@ -237,7 +237,8 @@ def check_cpa_services_job(main_loop, manual_logs: list = None):
                         
                         _log(f"开始逐一穿透测试这 {len(files)} 个凭证的健康状态，过程可能较长，请耐心等待...")
                         invalid_count = 0
-                        for item in files:
+                        total_files = len(files)
+                        for i, item in enumerate(files, 1):
                             if settings.cpa_auto_check_sleep_seconds > 0:
                                 import time
                                 time.sleep(settings.cpa_auto_check_sleep_seconds)
@@ -249,8 +250,9 @@ def check_cpa_services_job(main_loop, manual_logs: list = None):
                                 is_valid, msg = test_cliproxy_auth_file(item, svc.api_url, svc.api_token)
                                 if is_valid:
                                     valid_count += 1
+                                    _log(f"测活进度 [{i}/{total_files}]: 凭证 {name} 状态正常")
                                 else:
-                                    _log(f"CPA 凭证 {name} 失效 ({msg})，正在剔除...", 'warning')
+                                    _log(f"测活进度 [{i}/{total_files}]: 凭证 {name} 失效 ({msg})，正在剔除...", 'warning')
                                     try:
                                         delete_cliproxy_auth_file(name, svc.api_url, svc.api_token)
                                         invalid_count += 1
@@ -258,7 +260,7 @@ def check_cpa_services_job(main_loop, manual_logs: list = None):
                                     except Exception as e:
                                         _log(f"剔除凭证 {name} 失败: {e}", 'error')
                             except Exception as e:
-                                _log(f"测试凭证 {name} 失败: {e}", 'error')
+                                _log(f"测活进度 [{i}/{total_files}]: 测试凭证 {name} 报错 ({e})", 'error')
                                 # 如果测试异常不当作失效处理，避免误删
                                 valid_count += 1
                                 
