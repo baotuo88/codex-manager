@@ -93,6 +93,15 @@ const elements = {
     autoUploadTm: document.getElementById('auto-upload-tm'),
     tmServiceSelectGroup: document.getElementById('tm-service-select-group'),
     tmServiceSelect: document.getElementById('tm-service-select'),
+    // 定时 CPA
+    cpaAutoCheckEnabled: document.getElementById('cpa-auto-check-enabled'),
+    cpaTestUrl: document.getElementById('cpa-test-url'),
+    cpaCheckInterval: document.getElementById('cpa-check-interval'),
+    cpaAutoRegisterEnabled: document.getElementById('cpa-auto-register-enabled'),
+    cpaRegisterThreshold: document.getElementById('cpa-register-threshold'),
+    cpaRegisterBatchCount: document.getElementById('cpa-register-batch-count'),
+    cpaSaveConfigBtn: document.getElementById('cpa-save-config-btn'),
+    cpaForceCheckBtn: document.getElementById('cpa-force-check-btn'),
 };
 
 // 初始化
@@ -104,7 +113,22 @@ document.addEventListener('DOMContentLoaded', () => {
     initVisibilityReconnect();
     restoreActiveTask();
     initAutoUploadOptions();
+    loadSchedulerConfig();
 });
+
+async function loadSchedulerConfig() {
+    try {
+        const config = await api.get('/scheduler/config');
+        if (elements.cpaAutoCheckEnabled) elements.cpaAutoCheckEnabled.checked = config.check_enabled;
+        if (elements.cpaTestUrl) elements.cpaTestUrl.value = config.test_url || '';
+        if (elements.cpaCheckInterval) elements.cpaCheckInterval.value = config.check_interval;
+        if (elements.cpaAutoRegisterEnabled) elements.cpaAutoRegisterEnabled.checked = config.register_enabled;
+        if (elements.cpaRegisterThreshold) elements.cpaRegisterThreshold.value = config.register_threshold;
+        if (elements.cpaRegisterBatchCount) elements.cpaRegisterBatchCount.value = config.register_batch_count;
+    } catch (e) {
+        console.error('加载调度配置失败', e);
+    }
+}
 
 // 初始化注册后自动操作选项（CPA / Sub2API / TM）
 async function initAutoUploadOptions() {
@@ -217,6 +241,63 @@ function initEventListeners() {
     elements.outlookConcurrencyMode.addEventListener('change', () => {
         handleConcurrencyModeChange(elements.outlookConcurrencyMode, elements.outlookConcurrencyHint, elements.outlookIntervalGroup);
     });
+
+    if (elements.cpaSaveConfigBtn) {
+        elements.cpaSaveConfigBtn.addEventListener('click', handleSaveSchedulerConfig);
+    }
+    if (elements.cpaForceCheckBtn) {
+        elements.cpaForceCheckBtn.addEventListener('click', handleForceCheckCpa);
+    }
+}
+
+async function handleSaveSchedulerConfig() {
+    elements.cpaSaveConfigBtn.disabled = true;
+    elements.cpaSaveConfigBtn.textContent = "保存中...";
+    try {
+        await api.post('/scheduler/config', {
+            check_enabled: elements.cpaAutoCheckEnabled.checked,
+            check_interval: parseInt(elements.cpaCheckInterval.value) || 60,
+            test_url: elements.cpaTestUrl.value,
+            register_enabled: elements.cpaAutoRegisterEnabled.checked,
+            register_threshold: parseInt(elements.cpaRegisterThreshold.value) || 10,
+            register_batch_count: parseInt(elements.cpaRegisterBatchCount.value) || 5,
+        });
+        toast.success("自动任务配置已保存");
+        addLog('success', '[系统] 定时 CPA 任务及注册配置已保存');
+    } catch (e) {
+        toast.error("保存失败: " + e.message);
+    } finally {
+        elements.cpaSaveConfigBtn.disabled = false;
+        elements.cpaSaveConfigBtn.textContent = "💾 保存自动任务配置";
+    }
+}
+
+async function handleForceCheckCpa() {
+    elements.cpaForceCheckBtn.disabled = true;
+    addLog('info', '[系统] 🚀 正在发起立即 CPA 连通性测试 (请稍候)...');
+    try {
+        const res = await api.post('/scheduler/trigger');
+        if (res.logs && res.logs.length > 0) {
+            res.logs.forEach(msg => {
+                let level = 'info';
+                if (msg.includes('[WARNING]')) level = 'warning';
+                if (msg.includes('[ERROR]')) level = 'error';
+                addLog(level, msg);
+            });
+        } else {
+            addLog('warning', '[系统] 强制检测完毕，但无日志返回！');
+        }
+        if (res.success) {
+            toast.success(res.message || "检查执行完毕");
+        } else {
+            toast.error(res.message || "执行中发生错误");
+        }
+    } catch (e) {
+        toast.error("触发失败: " + e.message);
+        addLog('error', '[错误] 后台手动测试触发失败: ' + e.message);
+    } finally {
+        elements.cpaForceCheckBtn.disabled = false;
+    }
 }
 
 // 加载可用的邮箱服务

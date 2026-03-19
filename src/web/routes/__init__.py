@@ -12,6 +12,7 @@ from .payment import router as payment_router
 from .upload.cpa_services import router as cpa_services_router
 from .upload.sub2api_services import router as sub2api_services_router
 from .upload.tm_services import router as tm_services_router
+from .scheduler import router as scheduler_router
 
 api_router = APIRouter()
 
@@ -24,3 +25,4 @@ api_router.include_router(payment_router, prefix="/payment", tags=["payment"])
 api_router.include_router(cpa_services_router, prefix="/cpa-services", tags=["cpa-services"])
 api_router.include_router(sub2api_services_router, prefix="/sub2api-services", tags=["sub2api-services"])
 api_router.include_router(tm_services_router, prefix="/tm-services", tags=["tm-services"])
+api_router.include_router(scheduler_router, prefix="/scheduler", tags=["scheduler"])
