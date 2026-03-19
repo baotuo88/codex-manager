@@ -53,8 +53,7 @@ def upload_to_team_manager(
             headers=headers,
             json=payload,
             proxies=None,
-            timeout=30,
-            impersonate="chrome110",
+            timeout=30
         )
         if resp.status_code in (200, 201):
             return True, "上传成功"

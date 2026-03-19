@@ -1,21 +1,28 @@
 """
 账号管理 API 路由
 """
-
+import io
 import json
 import logging
-from typing import List, Optional
+import zipfile
 from datetime import datetime
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ...database import crud
-from ...database.session import get_db
-from ...database.models import Account
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
+from ...core.openai.token_refresh import refresh_account_token as do_refresh
+from ...core.openai.token_refresh import validate_account_token as do_validate
+from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, upload_to_cpa
+from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upload_to_team_manager
+from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub2api
+
+from ...database import crud
+from ...database.models import Account
+from ...database.session import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -477,10 +484,6 @@ async def export_accounts_sub2api(request: BatchExportRequest):
 @router.post("/export/cpa")
 async def export_accounts_cpa(request: BatchExportRequest):
     """导出账号为 CPA Token JSON 格式（每个账号单独一个 JSON 文件，打包为 ZIP）"""
-    import io
-    import zipfile
-    from ...core.upload.cpa_upload import generate_token_json
-
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
@@ -582,8 +585,6 @@ class BatchValidateRequest(BaseModel):
 @router.post("/batch-refresh")
 async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: BackgroundTasks):
     """批量刷新账号 Token"""
-    from ...core.openai.token_refresh import refresh_account_token as do_refresh
-
     # 使用传入的代理或全局代理配置
     proxy = request.proxy if request.proxy else get_settings().proxy_url
 
@@ -617,7 +618,6 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
 @router.post("/{account_id}/refresh")
 async def refresh_account_token(account_id: int, request: Optional[TokenRefreshRequest] = Body(default=None)):
     """刷新单个账号的 Token"""
-    from ...core.openai.token_refresh import refresh_account_token as do_refresh
 
     # 使用传入的代理或全局代理配置
     proxy = request.proxy if request and request.proxy else get_settings().proxy_url
@@ -639,7 +639,6 @@ async def refresh_account_token(account_id: int, request: Optional[TokenRefreshR
 @router.post("/batch-validate")
 async def batch_validate_tokens(request: BatchValidateRequest):
     """批量验证账号 Token 有效性"""
-    from ...core.openai.token_refresh import validate_account_token as do_validate
 
     # 使用传入的代理或全局代理配置
     proxy = request.proxy if request.proxy else get_settings().proxy_url
@@ -682,7 +681,6 @@ async def batch_validate_tokens(request: BatchValidateRequest):
 @router.post("/{account_id}/validate")
 async def validate_account_token(account_id: int, request: Optional[TokenValidateRequest] = Body(default=None)):
     """验证单个账号的 Token 有效性"""
-    from ...core.openai.token_refresh import validate_account_token as do_validate
 
     # 使用传入的代理或全局代理配置
     proxy = request.proxy if request and request.proxy else get_settings().proxy_url
@@ -717,7 +715,6 @@ class BatchCPAUploadRequest(BaseModel):
 @router.post("/batch-upload-cpa")
 async def batch_upload_accounts_to_cpa(request: BatchCPAUploadRequest):
     """批量上传账号到 CPA"""
-    from ...core.upload.cpa_upload import batch_upload_to_cpa
 
     proxy = request.proxy if request.proxy else get_settings().proxy_url
 
@@ -745,7 +742,6 @@ async def batch_upload_accounts_to_cpa(request: BatchCPAUploadRequest):
 @router.post("/{account_id}/upload-cpa")
 async def upload_account_to_cpa(account_id: int, request: Optional[CPAUploadRequest] = Body(default=None)):
     """上传单个账号到 CPA"""
-    from ...core.upload.cpa_upload import upload_to_cpa, generate_token_json
 
     proxy = request.proxy if request and request.proxy else get_settings().proxy_url
     cpa_service_id = request.cpa_service_id if request else None
@@ -809,7 +805,6 @@ class BatchSub2ApiUploadRequest(BaseModel):
 @router.post("/batch-upload-sub2api")
 async def batch_upload_accounts_to_sub2api(request: BatchSub2ApiUploadRequest):
     """批量上传账号到 Sub2API"""
-    from ...core.upload.sub2api_upload import batch_upload_to_sub2api
 
     # 解析指定的 Sub2API 服务
     api_url = None
@@ -848,7 +843,6 @@ async def batch_upload_accounts_to_sub2api(request: BatchSub2ApiUploadRequest):
 @router.post("/{account_id}/upload-sub2api")
 async def upload_account_to_sub2api(account_id: int, request: Optional[Sub2ApiUploadRequest] = Body(default=None)):
     """上传单个账号到 Sub2API"""
-    from ...core.upload.sub2api_upload import upload_to_sub2api
 
     service_id = request.service_id if request else None
     concurrency = request.concurrency if request else 3
@@ -908,7 +902,6 @@ class BatchUploadTMRequest(BaseModel):
 @router.post("/batch-upload-tm")
 async def batch_upload_accounts_to_tm(request: BatchUploadTMRequest):
     """批量上传账号到 Team Manager"""
-    from ...core.upload.team_manager_upload import batch_upload_to_team_manager
 
     with get_db() as db:
         if request.service_id:
@@ -935,7 +928,6 @@ async def batch_upload_accounts_to_tm(request: BatchUploadTMRequest):
 @router.post("/{account_id}/upload-tm")
 async def upload_account_to_tm(account_id: int, request: Optional[UploadTMRequest] = Body(default=None)):
     """上传单账号到 Team Manager"""
-    from ...core.upload.team_manager_upload import upload_to_team_manager
 
     service_id = request.service_id if request else None
 

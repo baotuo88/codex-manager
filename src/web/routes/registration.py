@@ -444,7 +444,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 # 自动上传到 Team Manager（可多服务）
                 if auto_upload_tm:
                     try:
-                        from ...core.upload.team_manager_upload import upload_account_to_tm
+                        from ...core.upload.team_manager_upload import upload_to_team_manager
                         from ...database.models import Account as AccountModel
                         saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
@@ -459,7 +459,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                                     if not _svc:
                                         continue
                                     log_callback(f"[TM] 上传到服务: {_svc.name}")
-                                    _ok, _msg = upload_account_to_tm(saved_account, _svc.api_url, _svc.api_key)
+                                    _ok, _msg = upload_to_team_manager(saved_account, _svc.api_url, _svc.api_key)
                                     log_callback(f"[TM] {'成功' if _ok else '失败'}({_svc.name}): {_msg}")
                                 except Exception as _e:
                                     log_callback(f"[TM] 异常({_sid}): {_e}")
