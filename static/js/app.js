@@ -276,6 +276,7 @@ async function handleSaveSchedulerConfig() {
     elements.cpaSaveConfigBtn.disabled = true;
     elements.cpaSaveConfigBtn.textContent = "保存中...";
     try {
+        const emailServicePool = getSelectedEmailServiceValues().filter(v => v !== 'outlook_batch:all');
         await api.post('/scheduler/config', {
             check_enabled: elements.cpaAutoCheckEnabled.checked,
             check_remove_401: elements.cpaAutoRemove401 ? elements.cpaAutoRemove401.checked : false,
@@ -288,7 +289,7 @@ async function handleSaveSchedulerConfig() {
             register_enabled: elements.cpaAutoRegisterEnabled.checked,
             register_threshold: parseInt(elements.cpaRegisterThreshold.value) || 10,
             register_batch_count: parseInt(elements.cpaRegisterBatchCount.value) || 5,
-            email_service: getPrimaryEmailServiceValue(),
+            email_service: emailServicePool.join(','),
         });
         toast.success("自动任务配置已保存");
         addLog('success', '[系统] 定时 CPA 任务及注册配置已保存');
@@ -306,6 +307,7 @@ async function handleStopSchedulerTask() {
     elements.cpaAutoCheckEnabled.checked = false;
     elements.cpaAutoRegisterEnabled.checked = false;
     try {
+        const emailServicePool = getSelectedEmailServiceValues().filter(v => v !== 'outlook_batch:all');
         await api.post('/scheduler/config', {
             check_enabled: false,
             check_remove_401: elements.cpaAutoRemove401 ? elements.cpaAutoRemove401.checked : false,
@@ -318,7 +320,7 @@ async function handleStopSchedulerTask() {
             register_enabled: false,
             register_threshold: parseInt(elements.cpaRegisterThreshold.value) || 10,
             register_batch_count: parseInt(elements.cpaRegisterBatchCount.value) || 5,
-            email_service: "",
+            email_service: emailServicePool.join(','),
         });
         toast.info("已停止自动任务");
         addLog('warning', '[系统] 🔴 定时监控与自动注册已被手动停止');

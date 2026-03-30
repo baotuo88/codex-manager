@@ -68,6 +68,16 @@ def update_proxy_usage(db, proxy_id: Optional[int]):
         crud.update_proxy_last_used(db, proxy_id)
 
 
+EMAIL_SERVICE_LABELS = {
+    "tempmail": "Tempmail.lol",
+    "generator_email": "Generator.email",
+    "outlook": "Outlook",
+    "custom_domain": "自定义域名",
+    "temp_mail": "Temp-Mail 自部署",
+    "duck_mail": "DuckMail",
+}
+
+
 def _parse_email_service_value(value: str) -> Tuple[str, Optional[int]]:
     """解析前端邮箱服务值 (type:id 或 type:default)。"""
     if not value:
@@ -326,6 +336,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 创建邮箱服务
             service_type = EmailServiceType(email_service_type)
             settings = get_settings()
+            service_name = None
+            service_id_for_log: Optional[int] = None
 
             # 优先使用数据库中配置的邮箱服务
             if email_service_id:
@@ -340,6 +352,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
                     # 更新任务关联的邮箱服务
                     crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                    service_name = db_service.name or EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
+                    service_id_for_log = db_service.id
                     logger.info(f"使用数据库邮箱服务: {db_service.name} (ID: {db_service.id}, 类型: {service_type.value})")
                 else:
                     raise ValueError(f"邮箱服务不存在或已禁用: {email_service_id}")
@@ -352,8 +366,10 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         "max_retries": settings.tempmail_max_retries,
                         "proxy_url": actual_proxy_url,
                     }
+                    service_name = EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
                 elif service_type == EmailServiceType.GENERATOR_EMAIL:
                     config = _normalize_email_service_config(service_type, email_service_config, actual_proxy_url)
+                    service_name = EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
                 elif service_type == EmailServiceType.CUSTOM_DOMAIN:
                     # 检查数据库中是否有可用的自定义域名服务
                     from ...database.models import EmailService as EmailServiceModel
@@ -365,6 +381,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
                         crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        service_name = db_service.name or EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
+                        service_id_for_log = db_service.id
                         logger.info(f"使用数据库自定义域名服务: {db_service.name}")
                     elif settings.custom_domain_base_url and settings.custom_domain_api_key:
                         config = {
@@ -372,6 +390,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                             "api_key": settings.custom_domain_api_key.get_secret_value() if settings.custom_domain_api_key else "",
                             "proxy_url": actual_proxy_url,
                         }
+                        service_name = "默认自定义域名服务"
                     else:
                         raise ValueError("没有可用的自定义域名邮箱服务，请先在设置中配置")
                 elif service_type == EmailServiceType.OUTLOOK:
@@ -404,6 +423,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     if selected_service and selected_service.config:
                         config = selected_service.config.copy()
                         crud.update_registration_task(db, task_uuid, email_service_id=selected_service.id)
+                        service_name = selected_service.name or EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
+                        service_id_for_log = selected_service.id
                         logger.info(f"使用数据库 Outlook 账户: {selected_service.name}")
                     else:
                         raise ValueError("所有 Outlook 账户都已注册过 OpenAI 账号，请添加新的 Outlook 账户")
@@ -418,16 +439,26 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     if db_service and db_service.config:
                         config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
                         crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        service_name = db_service.name or EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
+                        service_id_for_log = db_service.id
                         logger.info(f"使用数据库 DuckMail 服务: {db_service.name}")
                     else:
                         raise ValueError("没有可用的 DuckMail 邮箱服务，请先在邮箱服务页面添加服务")
                 else:
                     config = email_service_config or {}
-
-            email_service = EmailServiceFactory.create(service_type, config)
+                    service_name = EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
 
             # 创建注册引擎 - 使用 TaskManager 的日志回调
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
+
+            email_service = EmailServiceFactory.create(service_type, config)
+
+            # 记录邮箱服务来源，便于控制台追踪
+            label = service_name or EMAIL_SERVICE_LABELS.get(service_type.value, service_type.value)
+            if service_id_for_log:
+                log_callback(f"[邮箱] 使用服务: {label} (ID: {service_id_for_log}, 类型: {service_type.value})")
+            else:
+                log_callback(f"[邮箱] 使用服务: {label} (类型: {service_type.value})")
 
             engine = RegistrationEngine(
                 email_service=email_service,
@@ -675,6 +706,7 @@ async def run_batch_parallel(
             service_type, service_id = email_service_pool[idx % len(email_service_pool)]
         else:
             service_type, service_id = email_service_type, email_service_id
+        logger.info(f"批量任务 {batch_id}: 任务{idx + 1}/{len(task_uuids)} 开始 ({service_type}:{service_id or 'default'})")
         async with semaphore:
             await run_registration_task(
                 uuid, service_type, proxy, email_service_config, service_id,
@@ -696,7 +728,8 @@ async def run_batch_parallel(
                     elif t.status == "failed":
                         new_failed += 1
                         add_batch_log(f"{prefix} [失败] 注册失败: {t.error_message}")
-                    update_batch_status(completed=new_completed, success=new_success, failed=new_failed)
+            update_batch_status(completed=new_completed, success=new_success, failed=new_failed)
+            logger.info(f"批量任务 {batch_id}: 任务{idx + 1} 完成，状态={t.status}")
 
     try:
         await asyncio.gather(*[_run_one(i, u) for i, u in enumerate(task_uuids)], return_exceptions=True)
@@ -785,6 +818,14 @@ async def run_batch_pipeline(
             await semaphore.acquire()
             prefix = f"[任务{i + 1}]"
             add_batch_log(f"{prefix} 开始注册...")
+            if email_service_pool:
+                preview_type, preview_id = email_service_pool[i % len(email_service_pool)]
+            else:
+                preview_type, preview_id = email_service_type, email_service_id
+            logger.info(
+                f"批量任务 {batch_id}: 任务{i + 1}/{len(task_uuids)} 开始 "
+                f"({preview_type}:{preview_id or 'default'})"
+            )
             t = asyncio.create_task(_run_and_release(i, task_uuid, prefix))
             running_tasks_list.append(t)
 
@@ -958,7 +999,22 @@ async def start_batch_registration(
         raise HTTPException(status_code=400, detail="模式必须为 parallel 或 pipeline")
 
     from ...config.settings import get_settings
-    request.concurrency = get_settings().global_concurrency
+    settings = get_settings()
+    global_limit = settings.global_concurrency or 0
+    if global_limit > 0:
+        request.concurrency = min(request.concurrency, global_limit)
+    if request.concurrency < 1:
+        request.concurrency = 1
+    if request.concurrency > 50:
+        request.concurrency = 50
+
+    if email_service_pool:
+        pool_desc = ", ".join([f"{t}:{i or 'default'}" for t, i in email_service_pool])
+        logger.info(f"批量注册邮箱服务轮询池: {pool_desc}")
+    logger.info(
+        f"批量注册启动: 数量={request.count}, 并发={request.concurrency}, "
+        f"模式={request.mode}, 间隔={request.interval_min}-{request.interval_max}s"
+    )
 
     # 创建批量任务
     batch_id = str(uuid.uuid4())

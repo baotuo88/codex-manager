@@ -73,6 +73,16 @@ async def update_cpa_scheduler_config(request: CPASchedulerConfig, background_ta
         cpa_auto_register_batch_count=request.register_batch_count,
         cpa_auto_register_email_service=request.email_service,
     )
+
+    # 若关闭自动注册，尝试取消正在执行的自动注册批量任务
+    if not request.register_enabled:
+        try:
+            from ...core.scheduler import cancel_auto_register_batches
+            cancelled = cancel_auto_register_batches()
+            if cancelled > 0:
+                logger.info(f"已请求停止 {cancelled} 个自动注册批量任务")
+        except Exception as e:
+            logger.warning(f"停止自动注册批量任务失败: {e}")
     
     # 若启用了自动任务，保存后立刻在后台触发一次体检及补充，而不必等待下一个定时周期
     if request.check_enabled:

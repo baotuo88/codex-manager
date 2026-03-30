@@ -13,6 +13,7 @@ from curl_cffi import requests as cffi_requests
 from ..database.session import get_db
 from ..database import crud
 from ..config.settings import get_settings
+from ..config.constants import EmailServiceType
 from .upload.cpa_upload import _normalize_cpa_auth_files_url, _build_cpa_headers
 from ..web.routes.registration import run_batch_registration
 
@@ -126,6 +127,35 @@ def _extract_cpa_provider_value(payload: Any) -> Optional[str]:
         return _extract_cpa_provider_value(_decode_possible_json_payload(payload))
 
     return None
+
+
+def _parse_auto_register_email_pool(raw: str) -> List[tuple[str, Optional[int]]]:
+    """解析自动注册邮箱服务列表（支持逗号分隔）。"""
+    if not raw:
+        return []
+    items = [item.strip() for item in str(raw).replace(";", ",").split(",") if item.strip()]
+    pool: List[tuple[str, Optional[int]]] = []
+    for item in items:
+        if ":" in item:
+            svc_type, svc_id = item.split(":", 1)
+        else:
+            svc_type, svc_id = item, ""
+        svc_type = svc_type.strip()
+        if not svc_type:
+            continue
+        try:
+            EmailServiceType(svc_type)
+        except Exception:
+            continue
+        svc_id = (svc_id or "").strip()
+        parsed_id: Optional[int] = None
+        if svc_id and svc_id not in {"default", "all"}:
+            try:
+                parsed_id = int(svc_id)
+            except Exception:
+                parsed_id = None
+        pool.append((svc_type, parsed_id))
+    return pool
 
 
 def _is_cpa_codex_auth_file(item: dict) -> bool:
@@ -423,36 +453,44 @@ async def trigger_auto_registration(count: int, cpa_service_id: int):
     logger.info(f"触发自动注册凭证，数量: {count}, 目标CPA 服务 ID: {cpa_service_id}")
     task_uuids = [str(uuid.uuid4()) for _ in range(count)]
     batch_id = str(uuid.uuid4())
+    _track_auto_register_batch(batch_id)
 
     settings = get_settings()
     
     email_service_type = "temp_mail"
     email_service_id = None
+    email_service_pool: List[tuple[str, Optional[int]]] = []
     
     # 优先使用配置中保存的邮箱服务
     saved_email_svc = settings.cpa_auto_register_email_service
-    if saved_email_svc and ':' in saved_email_svc:
-        parts = saved_email_svc.split(':')
-        email_service_type = parts[0]
-        if parts[1] != 'default':
-            try:
-                email_service_id = int(parts[1])
-            except:
-                pass
+    if saved_email_svc:
+        email_service_pool = _parse_auto_register_email_pool(saved_email_svc)
+    if email_service_pool:
+        email_service_type, email_service_id = email_service_pool[0]
     else:
-        with get_db() as db:
-            enabled_services = crud.get_email_services(db, enabled=True)
-            if enabled_services:
-                best_svc = enabled_services[0]
-                email_service_type = best_svc.service_type
-                email_service_id = best_svc.id
+        if saved_email_svc and ':' in saved_email_svc:
+            parts = saved_email_svc.split(':', 1)
+            email_service_type = parts[0]
+            if len(parts) > 1 and parts[1] != 'default':
+                try:
+                    email_service_id = int(parts[1])
+                except:
+                    pass
+        else:
+            with get_db() as db:
+                enabled_services = crud.get_email_services(db, enabled=True)
+                if enabled_services:
+                    best_svc = enabled_services[0]
+                    email_service_type = best_svc.service_type
+                    email_service_id = best_svc.id
 
     with get_db() as db:
+        initial_service_id = email_service_id if len(email_service_pool) <= 1 else None
         for task_uuid in task_uuids:
             crud.create_registration_task(
                 db,
                 task_uuid=task_uuid,
-                email_service_id=email_service_id,
+                email_service_id=initial_service_id,
                 proxy=None
             )
 
@@ -468,6 +506,7 @@ async def trigger_auto_registration(count: int, cpa_service_id: int):
             interval_max=settings.registration_sleep_max,
             concurrency=settings.global_concurrency,
             mode="pipeline",
+            email_service_pool=email_service_pool if len(email_service_pool) > 1 else None,
             auto_upload_cpa=True,
             cpa_service_ids=[cpa_service_id],
         )
@@ -476,6 +515,37 @@ async def trigger_auto_registration(count: int, cpa_service_id: int):
 
 _is_checking = False
 _is_checking_401 = False
+_auto_register_batch_ids = set()
+_auto_register_batch_lock = threading.Lock()
+
+
+def _track_auto_register_batch(batch_id: str) -> None:
+    if not batch_id:
+        return
+    with _auto_register_batch_lock:
+        _auto_register_batch_ids.add(batch_id)
+
+
+def cancel_auto_register_batches() -> int:
+    """取消所有自动注册批量任务（不影响手动发起的批量注册）"""
+    try:
+        from ..web.task_manager import task_manager
+    except Exception:
+        return 0
+
+    with _auto_register_batch_lock:
+        batch_ids = list(_auto_register_batch_ids)
+        _auto_register_batch_ids.clear()
+
+    cancelled = 0
+    for batch_id in batch_ids:
+        try:
+            task_manager.cancel_batch(batch_id)
+            append_system_log("warning", f"已请求停止自动注册批量任务: {batch_id[:8]}")
+            cancelled += 1
+        except Exception:
+            continue
+    return cancelled
 
 def check_cpa_services_401_job(main_loop, manual_logs: list = None):
     """快速检查并剔除面板标记 401/403 的凭证（不做测活）"""
