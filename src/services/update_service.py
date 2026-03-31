@@ -224,6 +224,61 @@ class UpdateService:
         return work_root, workspace_dir, current_dir, backup_dir
 
     @staticmethod
+    def _resolve_data_dir(settings) -> Path:
+        env_data_dir = os.environ.get("APP_DATA_DIR")
+        if env_data_dir:
+            return Path(env_data_dir).expanduser()
+
+        db_url = getattr(settings, "database_url", "") or ""
+        if isinstance(db_url, str):
+            if db_url.startswith("sqlite:///"):
+                db_path = db_url[10:]
+                if db_path:
+                    path = Path(db_path)
+                    if not path.is_absolute():
+                        path = (Path.cwd() / path).resolve()
+                    return path.parent
+            if "://" not in db_url and db_url.strip():
+                path = Path(db_url)
+                if not path.is_absolute():
+                    path = (Path.cwd() / path).resolve()
+                return path.parent
+
+        return (Path.cwd() / "data").resolve()
+
+    @staticmethod
+    def _resolve_logs_dir(settings) -> Path:
+        env_logs_dir = os.environ.get("APP_LOGS_DIR")
+        if env_logs_dir:
+            return Path(env_logs_dir).expanduser()
+
+        log_file = getattr(settings, "log_file", "") or "logs/app.log"
+        log_path = Path(log_file)
+        if not log_path.is_absolute():
+            log_path = (Path.cwd() / log_path).resolve()
+        return log_path.parent
+
+    @classmethod
+    def _write_runtime_env(cls, target_dir: Path) -> None:
+        if not target_dir:
+            return
+        try:
+            settings = get_settings()
+            data_dir = cls._resolve_data_dir(settings)
+            logs_dir = cls._resolve_logs_dir(settings)
+            lines: list[str] = []
+            if data_dir:
+                lines.append(f"APP_DATA_DIR={data_dir}")
+            if logs_dir:
+                lines.append(f"APP_LOGS_DIR={logs_dir}")
+            if not lines:
+                return
+            target_dir.mkdir(parents=True, exist_ok=True)
+            (target_dir / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as exc:
+            logger.warning("写入运行时环境文件失败: %s", exc)
+
+    @staticmethod
     def _unwrap_stage_dir(stage_dir: Path) -> Path:
         children = [item for item in stage_dir.iterdir() if item.name != "__MACOSX"]
         if len(children) == 1 and children[0].is_dir():
@@ -276,6 +331,7 @@ class UpdateService:
 
             (promote_source / "VERSION").write_text(f"{latest_tag}\n", encoding="utf-8")
             self._promote_current_directory(promote_source, current_dir, backup_dir)
+            self._write_runtime_env(current_dir)
         except zipfile.BadZipFile as exc:
             raise RuntimeError(f"更新包不是有效 zip 文件: {exc}") from exc
         finally:
