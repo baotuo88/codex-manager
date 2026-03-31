@@ -392,6 +392,12 @@ def get_data_dir() -> Path:
     Returns:
         数据目录 Path 对象
     """
+    env_data_dir = os.environ.get("APP_DATA_DIR")
+    if env_data_dir:
+        data_dir = Path(env_data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
+
     settings = get_settings()
     if not settings.database_url.startswith("sqlite"):
         data_dir = Path(os.environ.get("APP_DATA_DIR", "data"))
@@ -417,6 +423,12 @@ def get_logs_dir() -> Path:
     Returns:
         日志目录 Path 对象
     """
+    env_logs_dir = os.environ.get("APP_LOGS_DIR")
+    if env_logs_dir:
+        log_dir = Path(env_logs_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
+
     settings = get_settings()
     log_file = Path(settings.log_file)
     log_dir = log_file.parent

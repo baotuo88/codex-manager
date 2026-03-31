@@ -453,6 +453,12 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.CPA,
         description="自动补充注册使用的邮箱服务组合标记"
     ),
+    "cpa_auto_register_token_mode": SettingDefinition(
+        db_key="cpa.auto_register_token_mode",
+        default_value="auto",
+        category=SettingCategory.CPA,
+        description="自动补充注册的 Token 获取方式（session / oauth / auto）"
+    ),
 
     # 验证码配置
     "email_code_timeout": SettingDefinition(
@@ -599,6 +605,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "cpa_auto_register_threshold": int,
     "cpa_auto_register_batch_count": int,
     "cpa_auto_register_email_service": str,
+    "cpa_auto_register_token_mode": str,
     "email_code_timeout": int,
     "email_code_poll_interval": int,
     "outlook_provider_priority": list,
@@ -756,6 +763,18 @@ def _load_settings_from_db() -> Dict[str, Any]:
             env_update_repo = os.environ.get("APP_UPDATE_REPOSITORY")
             if env_update_repo:
                 settings_dict["update_repository"] = env_update_repo
+            env_data_dir = os.environ.get("APP_DATA_DIR")
+            if env_data_dir:
+                db_url = settings_dict.get("database_url")
+                if isinstance(db_url, str):
+                    if db_url.startswith("sqlite:///"):
+                        db_path = db_url[10:]
+                        if not os.path.isabs(db_path):
+                            db_name = Path(db_path).name or "database.db"
+                            settings_dict["database_url"] = f"sqlite:///{Path(env_data_dir) / db_name}"
+                    elif "://" not in db_url:
+                        db_name = Path(db_url).name or "database.db"
+                        settings_dict["database_url"] = f"sqlite:///{Path(env_data_dir) / db_name}"
         return settings_dict
     except Exception as e:
         if "未初始化" not in str(e):
@@ -793,7 +812,7 @@ class Settings(BaseModel):
 
     # 应用信息
     app_name: str = "OpenAI/Codex CLI 自动注册系统"
-    app_version: str = "2.0.0"
+    app_version: str = "2.0.6"
     debug: bool = False
 
     # 数据库配置
@@ -910,6 +929,7 @@ class Settings(BaseModel):
     cpa_auto_register_threshold: int = 10
     cpa_auto_register_batch_count: int = 5
     cpa_auto_register_email_service: str = ""
+    cpa_auto_register_token_mode: str = "auto"
 
     # 验证码配置
     email_code_timeout: int = 120

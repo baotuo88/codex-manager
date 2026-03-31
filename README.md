@@ -118,6 +118,8 @@ cp .env.example .env
 | `APP_ACCESS_PASSWORD` | Web UI 访问密钥 | `admin123` |
 | `APP_DATABASE_URL` | 数据库连接字符串 | `data/database.db` |
 | `APP_UPDATE_REPOSITORY` | 更新检查仓库 | `moeacgx/codex-manager` |
+| `APP_DATA_DIR` | 数据目录（持久化） | `data` |
+| `APP_LOGS_DIR` | 日志目录（持久化） | `logs` |
 
 > 优先级：命令行参数 > 环境变量（`.env`）> 数据库设置 > 默认值
 

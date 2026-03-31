@@ -513,6 +513,7 @@ async function handleSaveSchedulerConfig() {
             register_threshold: parseInt(elements.cpaRegisterThreshold.value) || 10,
             register_batch_count: parseInt(elements.cpaRegisterBatchCount.value) || 5,
             email_service: emailServicePool.join(','),
+            token_mode: elements.tokenMode ? elements.tokenMode.value : 'auto',
         });
         toast.success("自动任务配置已保存");
         addLog('success', '[系统] 定时 CPA 任务及注册配置已保存');
@@ -545,6 +546,7 @@ async function handleStopSchedulerTask() {
             register_threshold: parseInt(elements.cpaRegisterThreshold.value) || 10,
             register_batch_count: parseInt(elements.cpaRegisterBatchCount.value) || 5,
             email_service: emailServicePool.join(','),
+            token_mode: elements.tokenMode ? elements.tokenMode.value : 'auto',
         });
         toast.info("已停止自动任务");
         addLog('warning', '[系统] 🔴 定时监控与自动注册已被手动停止');

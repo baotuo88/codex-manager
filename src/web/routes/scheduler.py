@@ -23,6 +23,7 @@ class CPASchedulerConfig(BaseModel):
     register_threshold: int
     register_batch_count: int
     email_service: str
+    token_mode: str = "auto"
 
 @router.get("/config")
 async def get_cpa_scheduler_config():
@@ -41,7 +42,8 @@ async def get_cpa_scheduler_config():
         "register_enabled": settings.cpa_auto_register_enabled,
         "register_threshold": settings.cpa_auto_register_threshold,
         "register_batch_count": settings.cpa_auto_register_batch_count,
-        "email_service": settings.cpa_auto_register_email_service
+        "email_service": settings.cpa_auto_register_email_service,
+        "token_mode": settings.cpa_auto_register_token_mode,
     }
 
 @router.get("/logs")
@@ -63,6 +65,8 @@ async def update_cpa_scheduler_config(request: CPASchedulerConfig, background_ta
     """保存CPA自动化配置"""
     if request.check_mode not in ("probe", "panel"):
         raise HTTPException(status_code=400, detail="检测方式必须为 probe 或 panel")
+    if request.token_mode not in ("session", "oauth", "auto"):
+        raise HTTPException(status_code=400, detail="Token 获取方式必须为 session / oauth / auto")
     update_settings(
         cpa_auto_check_enabled=request.check_enabled,
         cpa_auto_check_mode=request.check_mode,
@@ -77,6 +81,7 @@ async def update_cpa_scheduler_config(request: CPASchedulerConfig, background_ta
         cpa_auto_register_threshold=request.register_threshold,
         cpa_auto_register_batch_count=request.register_batch_count,
         cpa_auto_register_email_service=request.email_service,
+        cpa_auto_register_token_mode=request.token_mode,
     )
 
     # 若关闭自动注册，尝试取消正在执行的自动注册批量任务

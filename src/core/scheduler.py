@@ -610,6 +610,11 @@ async def trigger_auto_registration(count: int, cpa_service_id: int):
                 proxy=None
             )
 
+    auto_token_mode = (settings.cpa_auto_register_token_mode or "auto").strip().lower()
+    if auto_token_mode not in ("session", "oauth", "auto"):
+        auto_token_mode = "auto"
+        append_system_log("warning", "自动注册 Token 获取方式无效，已回退为 auto")
+
     asyncio.create_task(
         run_batch_registration(
             batch_id=batch_id,
@@ -622,7 +627,7 @@ async def trigger_auto_registration(count: int, cpa_service_id: int):
             interval_max=settings.registration_sleep_max,
             concurrency=settings.global_concurrency,
             mode="pipeline",
-            token_mode="auto",
+            token_mode=auto_token_mode,
             email_service_pool=email_service_pool if len(email_service_pool) > 1 else None,
             auto_upload_cpa=True,
             cpa_service_ids=[cpa_service_id],
