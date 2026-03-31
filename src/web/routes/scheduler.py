@@ -11,6 +11,7 @@ router = APIRouter()
 
 class CPASchedulerConfig(BaseModel):
     check_enabled: bool
+    check_mode: str = "panel"
     check_remove_401: bool = False
     check_remove_401_interval: int = 3
     check_interval: int
@@ -29,6 +30,7 @@ async def get_cpa_scheduler_config():
     settings = get_settings()
     return {
         "check_enabled": settings.cpa_auto_check_enabled,
+        "check_mode": settings.cpa_auto_check_mode,
         "check_remove_401": settings.cpa_auto_check_remove_401,
         "check_remove_401_interval": settings.cpa_auto_check_remove_401_interval,
         "check_interval": settings.cpa_auto_check_interval,
@@ -59,8 +61,11 @@ async def get_system_logs(since_id: int = 0):
 @router.post("/config")
 async def update_cpa_scheduler_config(request: CPASchedulerConfig, background_tasks: BackgroundTasks):
     """保存CPA自动化配置"""
+    if request.check_mode not in ("probe", "panel"):
+        raise HTTPException(status_code=400, detail="检测方式必须为 probe 或 panel")
     update_settings(
         cpa_auto_check_enabled=request.check_enabled,
+        cpa_auto_check_mode=request.check_mode,
         cpa_auto_check_remove_401=request.check_remove_401,
         cpa_auto_check_remove_401_interval=request.check_remove_401_interval,
         cpa_auto_check_interval=request.check_interval,
@@ -86,9 +91,9 @@ async def update_cpa_scheduler_config(request: CPASchedulerConfig, background_ta
     
     # 若启用了自动任务，保存后立刻在后台触发一次体检及补充，而不必等待下一个定时周期
     if request.check_enabled:
-        from ...core.scheduler import check_cpa_services_job
+        from ...core.scheduler import request_cpa_check_once
         loop = asyncio.get_event_loop()
-        background_tasks.add_task(loop.run_in_executor, None, check_cpa_services_job, loop, None)
+        background_tasks.add_task(loop.run_in_executor, None, request_cpa_check_once, loop, "config")
 
     return {"success": True, "message": "定时任务配置已保存"}
 
@@ -103,5 +108,24 @@ async def trigger_cpa_scheduler_check():
         # 在线程池中执行，并正确传入 manual_logs 参数。
         await loop.run_in_executor(None, check_cpa_services_job, None, manual_logs)
         return {"success": True, "logs": manual_logs, "message": "检查执行完毕！"}
+    except Exception as e:
+        return {"success": False, "logs": manual_logs, "message": str(e)}
+
+@router.post("/trigger-401")
+async def trigger_cpa_scheduler_remove_401():
+    """手动触发一次 401/403/usage_limit_reached 快速剔除并返回结果日志"""
+    from ...core.scheduler import check_cpa_services_401_job
+
+    manual_logs = []
+    if not get_settings().cpa_auto_check_remove_401:
+        return {
+            "success": False,
+            "logs": manual_logs,
+            "message": "请先勾选“直接剔除面板明确报错的凭证（401、403、usage_limit_reached）”"
+        }
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, check_cpa_services_401_job, None, manual_logs, True)
+        return {"success": True, "logs": manual_logs, "message": "401/403/usage_limit_reached 快速剔除执行完毕！"}
     except Exception as e:
         return {"success": False, "logs": manual_logs, "message": str(e)}

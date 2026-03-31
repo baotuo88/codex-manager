@@ -27,6 +27,7 @@ AI 站长交流群：https://t.me/vpsbbq
     - **TempMail**：自部署 Cloudflare Worker 临时邮箱，配置 Worker 地址 + Admin 密码
   - DuckMail
     - **DuckMail API**：兼容 DuckMail 接口，手动填写 API 地址、默认域名，可选 API Key
+  - 支持**多选邮箱服务轮询**，自动在所选服务间分配请求，降低单服务 429 风险
 
 - **注册模式**
   - 单次注册
@@ -35,7 +36,10 @@ AI 站长交流群：https://t.me/vpsbbq
 
 - **全新流式高匿取 Token 链路**
   - 新老账号完美融合与适配：走完全真实的建号步骤或遇已注册号自动转入二次验证，直接携带解算的 Sentinel Token 无感进行 OTP 校验。
-  - **极致精简提权的 Session 直取机制**：弃用易掉链子的传统中间层 OAuth 取 Token 解析流。走到注册尾步回调后，系统会直接利用安全注入了 oai-did 设备的 Session 环境从 `/api/auth/session` 中抽取完整 `access_token` 及 `refresh_token` 等敏感属性。
+  - **支持两种 Token 获取方式**：
+    - **OAuth 登录流程（含 refresh_token）**：使用登录 + 授权 + 回调链路获取完整 token。
+    - **Session 提取**：注册/登录完成后直接从 `/api/auth/session` 抽取 token。
+  - **自动模式**：默认优先 OAuth，失败自动回退 Session，可在 UI 中切换。
 
 - **并发控制**
   - 流水线模式（Pipeline）：每隔 interval 秒启动新任务，限制最大并发数
@@ -308,69 +312,6 @@ docker-compose up -d
 
 服务启动后访问 http://localhost:8000
 
-### MicroWARP 代理池（可选）
-
-> 说明：该方案通过多容器实现不同出口 IP（**不持久化 WARP 账号**）。
-
-**一键启动（推荐）**
-
-```bash
-# 生成 MicroWARP 组合配置并启动全部服务
-./scripts/docker-up.sh
-```
-
-PowerShell：
-```powershell
-# 生成 MicroWARP 组合配置并启动全部服务
-./scripts/docker-up.ps1
-```
-
-**手动方式**
-
-```bash
-# 生成 MicroWARP 组合配置（默认端口范围 12001-12005，统一入口 1080）
-python scripts/generate_microwarp_compose.py
-
-# 启动（合并主 compose 与生成文件）
-docker compose -f docker-compose.yml -f docker-compose.microwarp.generated.yml up -d
-```
-
-可配置环境变量：
-- `WARP_PORT_START`：端口范围起始（默认 12001）
-- `WARP_PORT_END`：端口范围结束（默认 12005）
-- `WARP_FRONT_PORT`：统一入口端口（默认 1080，Windows 上建议用 10899）
-
-动态代理入口（轮询）：`socks5://127.0.0.1:${WARP_FRONT_PORT:-10899}`
-直连节点（端口范围）：`socks5://127.0.0.1:${WARP_PORT_START:-12001}~${WARP_PORT_END:-12005}`
-
-**动态代理（任务级轮询）**
-
-为了让“每次任务”切换端口，提供两种方式：
-
-**方式 A：本地直连（推荐）**
-- 代理 API 地址：`local://port-range`
-- API 密钥：留空
-- 密钥请求头：保持默认
-- JSON 字段路径：留空
-
-> 该方式不走 HTTP 请求，直接在进程内轮询端口范围，避免容器内访问 127.0.0.1 的问题。
-
-可通过环境变量覆盖：
-- `LOCAL_PROXY_HOST`（默认 127.0.0.1）
-- `LOCAL_PROXY_SCHEME`（默认 socks5）
-- `LOCAL_PROXY_PORT_RANGE`（默认 12001-12005）
-
-**方式 B：HTTP API**
-- API 地址：`http://127.0.0.1:8000/api/proxy/dynamic`
-- JSON 字段路径：`proxy`
-
-验证示例：
-```bash
-curl --socks5-hostname 127.0.0.1:${WARP_FRONT_PORT:-10899} https://1.1.1.1/cdn-cgi/trace
-curl --socks5-hostname 127.0.0.1:${WARP_PORT_START:-12001} https://1.1.1.1/cdn-cgi/trace
-curl http://127.0.0.1:8000/api/proxy/dynamic
-```
-
 ### 配置说明
 
 **端口映射**：默认 `8000` 端口，可在 `docker-compose.yml` 中修改。
@@ -416,7 +357,7 @@ docker-compose up -d --build --force-recreate
 - 代理优先级：动态代理 > 代理列表（随机/默认） > 直连
 - CPA / Sub2API / Team Manager 上传始终直连，不走代理
 - 注册时自动随机生成用户名和生日（年龄范围 18-45 岁）
-- 新注册账号会在建号完成后自动补走一次登录流程，以获取完整 token；已注册邮箱则直接进入登录流程
+- Token 获取方式支持 OAuth 登录流程或 Session 提取；自动模式默认优先 OAuth，失败回退 Session
 - 支付链接生成使用账号 access_token 鉴权，走全局代理配置
 - 无痕浏览器优先使用 playwright（注入 cookie 直达支付页）；未安装时降级为系统 Chrome/Edge 无痕模式
 - 安装完整支付功能：`pip install ".[payment]" && playwright install chromium`（可选）

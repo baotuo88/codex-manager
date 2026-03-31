@@ -21,6 +21,7 @@ from ..config.constants import OTP_CODE_PATTERN
 
 
 logger = logging.getLogger(__name__)
+EMAIL_ADDRESS_PATTERN = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 
 
 class TempMailService(BaseEmailService):
@@ -42,6 +43,7 @@ class TempMailService(BaseEmailService):
                 - enable_prefix: 是否启用前缀，默认 True
                 - timeout: 请求超时时间，默认 30
                 - max_retries: 最大重试次数，默认 3
+                - site_password/custom_auth: 若开启私有站点密码，填写 x-custom-auth
             name: 服务名称
         """
         super().__init__(EmailServiceType.TEMP_MAIL, name)
@@ -138,6 +140,20 @@ class TempMailService(BaseEmailService):
             or ""
         ).strip()
         raw = str(mail.get("raw") or "").strip()
+        source_text = str(mail.get("source") or "").strip()
+        if not raw and source_text:
+            looks_like_raw = any(
+                key in source_text.lower()
+                for key in ("subject:", "content-type:", "mime-version:", "return-path:", "from:", "to:")
+            )
+            if looks_like_raw:
+                raw = source_text
+                sender = str(
+                    mail.get("from")
+                    or mail.get("from_address")
+                    or mail.get("fromAddress")
+                    or ""
+                ).strip()
 
         if raw:
             try:
@@ -161,11 +177,27 @@ class TempMailService(BaseEmailService):
 
     def _admin_headers(self) -> Dict[str, str]:
         """构造 admin 请求头"""
-        return {
+        headers = {
             "x-admin-auth": self.config["admin_password"],
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        custom_auth = (self.config.get("site_password") or self.config.get("custom_auth") or "").strip()
+        if custom_auth:
+            headers["x-custom-auth"] = custom_auth
+        return headers
+
+    def _user_headers(self, jwt: str) -> Dict[str, str]:
+        """构造地址 JWT 请求头（/api/*）"""
+        headers = {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        custom_auth = (self.config.get("site_password") or self.config.get("custom_auth") or "").strip()
+        if custom_auth:
+            headers["x-custom-auth"] = custom_auth
+        return headers
 
     def _make_request(self, method: str, path: str, **kwargs) -> Any:
         """
@@ -213,6 +245,12 @@ class TempMailService(BaseEmailService):
             if isinstance(e, EmailServiceError):
                 raise
             raise EmailServiceError(f"请求失败: {method} {path} - {e}")
+
+    def _strip_email_addresses(self, text: str) -> str:
+        """移除正文中的邮箱地址，避免将邮箱数字误判为验证码。"""
+        if not text:
+            return ""
+        return re.sub(EMAIL_ADDRESS_PATTERN, " ", text)
 
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -298,7 +336,7 @@ class TempMailService(BaseEmailService):
         start_time = time.time()
         seen_mail_ids: set = set()
 
-        # 优先使用用户级 JWT，回退到 admin API
+        # 优先使用地址级 JWT（/api/mails），回退到 admin API
         cached = self._email_cache.get(email, {})
         jwt = cached.get("jwt")
 
@@ -307,9 +345,9 @@ class TempMailService(BaseEmailService):
                 if jwt:
                     response = self._make_request(
                         "GET",
-                        "/user_api/mails",
+                        "/api/mails",
                         params={"limit": 20, "offset": 0},
-                        headers={"x-user-token": jwt, "Content-Type": "application/json", "Accept": "application/json"},
+                        headers=self._user_headers(jwt),
                     )
                 else:
                     response = self._make_request(
@@ -337,12 +375,13 @@ class TempMailService(BaseEmailService):
                     body_text = parsed["body"]
                     raw_text = parsed["raw"]
                     content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
+                    safe_content = self._strip_email_addresses(content)
 
                     # 只处理 OpenAI 邮件
                     if "openai" not in sender and "openai" not in content.lower():
                         continue
 
-                    match = re.search(pattern, content)
+                    match = re.search(pattern, safe_content)
                     if match:
                         code = match.group(1)
                         logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
@@ -351,6 +390,9 @@ class TempMailService(BaseEmailService):
 
             except Exception as e:
                 logger.debug(f"检查 TempMail 邮件时出错: {e}")
+                if jwt:
+                    # 地址 JWT 可能失效，回退到 admin API
+                    jwt = None
 
             time.sleep(3)
 

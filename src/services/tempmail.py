@@ -16,6 +16,7 @@ from ..config.constants import OTP_CODE_PATTERN
 
 
 logger = logging.getLogger(__name__)
+EMAIL_ADDRESS_PATTERN = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 
 
 class TempmailService(BaseEmailService):
@@ -61,6 +62,12 @@ class TempmailService(BaseEmailService):
         # 状态变量
         self._email_cache: Dict[str, Dict[str, Any]] = {}
         self._last_check_time: float = 0
+
+    def _strip_email_addresses(self, text: str) -> str:
+        """移除正文中的邮箱地址，避免将邮箱数字误判为验证码。"""
+        if not text:
+            return ""
+        return re.sub(EMAIL_ADDRESS_PATTERN, " ", text)
 
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -199,13 +206,14 @@ class TempmailService(BaseEmailService):
                     html = str(msg.get("html") or "")
 
                     content = "\n".join([sender, subject, body, html])
+                    safe_content = self._strip_email_addresses(content)
 
                     # 检查是否是 OpenAI 邮件
                     if "openai" not in sender and "openai" not in content.lower():
                         continue
 
                     # 提取验证码
-                    match = re.search(pattern, content)
+                    match = re.search(pattern, safe_content)
                     if match:
                         code = match.group(1)
                         logger.info(f"找到验证码: {code}")
@@ -353,13 +361,14 @@ class TempmailService(BaseEmailService):
                     html = str(msg.get("html") or "")
 
                     content = "\n".join([sender, subject, body, html])
+                    safe_content = self._strip_email_addresses(content)
 
                     # 检查是否是 OpenAI 邮件
                     if "openai" not in sender and "openai" not in content.lower():
                         continue
 
                     # 提取验证码
-                    match = re.search(OTP_CODE_PATTERN, content)
+                    match = re.search(OTP_CODE_PATTERN, safe_content)
                     if match:
                         code = match.group(1)
                         if callback:

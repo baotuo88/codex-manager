@@ -146,6 +146,34 @@
                 position: static;
             }
         }
+
+        /* 定时 CPA 头部布局优化（移动端） */
+        .scheduler-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: var(--spacing-xs);
+            flex-wrap: wrap;
+        }
+        .scheduler-actions {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        @media (max-width: 480px) {
+            .scheduler-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .scheduler-actions {
+                width: 100%;
+            }
+            .scheduler-actions .btn {
+                width: 100%;
+                font-size: 0.7rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -238,9 +266,19 @@
                                     </select>
                                 </div>
 
+                                <div class="form-group" id="token-mode-group">
+                                    <label for="token-mode">Token 获取方式</label>
+                                    <select id="token-mode" name="token_mode">
+                                        <option value="session">Session 提取</option>
+                                        <option value="oauth">OAuth 授权（含 refresh_token）</option>
+                                        <option value="auto" selected>自动（优先 OAuth，前10个采样）</option>
+                                    </select>
+                                    <small style="color: var(--text-muted); font-size: 0.75rem;">自动模式：每轮前 10 个使用 OAuth 采样，成功 &lt; 3 切换 Session；OAuth 失败会回退 Session</small>
+                                </div>
+
                                 <div class="form-group" id="batch-count-group" style="display: none;">
-                                    <label for="batch-count">注册数量 (1-100)</label>
-                                    <input type="number" id="batch-count" name="batch_count" min="1" max="100" value="5">
+                                    <label for="batch-count">注册数量</label>
+                                    <input type="number" id="batch-count" name="batch_count" min="1" value="5">
                                 </div>
 
                                 <div id="batch-options" style="display: none;">
@@ -303,21 +341,31 @@
                                 </div>
 
                                 <div class="form-group" id="scheduler-group" style="padding-top: var(--spacing-sm); border-top: 1px solid var(--border-light); margin-top: var(--spacing-sm);">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-xs);">
+                                    <div class="scheduler-header">
                                         <label style="font-weight: 500; margin-bottom: 0;">自动监控与注册 (定时 CPA) <span id="cpa-scheduler-status-badge" style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; margin-left: 6px;"></span></label>
-                                        <button type="button" class="btn btn-ghost btn-sm" id="cpa-force-check-btn" style="padding: 2px 8px; font-size: 0.75rem;">⚡ 强制体检</button>
+                                        <div class="scheduler-actions">
+                                            <button type="button" class="btn btn-ghost btn-sm" id="cpa-force-remove-401-btn" style="padding: 2px 8px; font-size: 0.75rem;">⚡ 快速剔除401/403/usage_limit_reached</button>
+                                            <button type="button" class="btn btn-ghost btn-sm" id="cpa-force-check-btn" style="padding: 2px 8px; font-size: 0.75rem;">⚡ 强制体检</button>
+                                        </div>
                                     </div>
                                     <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px;">
                                         <input type="checkbox" id="cpa-auto-check-enabled">
                                         <span>启用异常凭证测试并自动剔除</span>
                                     </label>
                                     <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px; padding-left: 24px;">
+                                        <span style="font-size: 0.8rem; color: var(--text-muted);">检测方式</span>
+                                        <select id="cpa-check-mode" style="padding: 4px 8px; font-size: 0.8rem;">
+                                            <option value="probe">直连穿透测活（容易死号）</option>
+                                            <option value="panel" selected>面板报错剔除（默认，不测活）</option>
+                                        </select>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px; padding-left: 24px;">
                                         <input type="checkbox" id="cpa-auto-remove-401">
-                                        <span>直接剔除面板明确报错的凭证（401、403）</span>
+                                        <span>直接剔除面板明确报错的凭证（401、403、usage_limit_reached）</span>
                                     </label>
                                     <div style="margin-top: 6px; padding-left: 48px; display: grid; grid-template-columns: 1fr; gap: 8px;">
                                         <div class="form-group">
-                                            <label for="cpa-check-401-interval" style="font-size: 0.8rem; color: var(--text-muted);">401/403 快速剔除间隔 (分钟)</label>
+                                            <label for="cpa-check-401-interval" style="font-size: 0.8rem; color: var(--text-muted);">401/403/usage_limit_reached 快速剔除间隔 (分钟)</label>
                                             <input type="number" id="cpa-check-401-interval" min="1" max="1440" value="3" style="padding: 4px 8px; font-size: 0.8rem;">
                                         </div>
                                     </div>
@@ -358,7 +406,7 @@
                                         </div>
                                         <div class="form-group">
                                             <label for="cpa-register-batch-count" style="font-size: 0.8rem; color: var(--text-muted);">每次自动补充数量</label>
-                                            <input type="number" id="cpa-register-batch-count" min="1" max="50" value="5" style="padding: 4px 8px; font-size: 0.8rem;">
+                                            <input type="number" id="cpa-register-batch-count" min="1" value="5" style="padding: 4px 8px; font-size: 0.8rem;">
                                         </div>
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; width: 100%;">

@@ -354,11 +354,17 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.CPA,
         description="是否启用定时检查并剔除失效 CPA 凭证"
     ),
+    "cpa_auto_check_mode": SettingDefinition(
+        db_key="cpa.auto_check_mode",
+        default_value="panel",
+        category=SettingCategory.CPA,
+        description="自动检测方式：probe=直连穿透测活，panel=面板报错剔除"
+    ),
     "cpa_auto_check_remove_401": SettingDefinition(
         db_key="cpa.auto_check_remove_401",
         default_value=False,
         category=SettingCategory.CPA,
-        description="是否直接剔除面板标记为 401/403 的凭证（跳过测活）"
+        description="是否直接剔除面板标记为 401/403/usage_limit_reached 的凭证（跳过测活）"
     ),
     "cpa_auto_check_remove_401_interval": SettingDefinition(
         db_key="cpa.auto_check_remove_401_interval",
@@ -485,6 +491,7 @@ SETTING_TYPES: Dict[str, Type] = {
     "tm_enabled": bool,
     "cpa_enabled": bool,
     "cpa_auto_check_enabled": bool,
+    "cpa_auto_check_mode": str,
     "cpa_auto_check_remove_401": bool,
     "cpa_auto_check_remove_401_interval": int,
     "cpa_auto_check_interval": int,
@@ -781,6 +788,7 @@ class Settings(BaseModel):
     cpa_api_url: str = ""
     cpa_api_token: SecretStr = SecretStr("")
     cpa_auto_check_enabled: bool = False
+    cpa_auto_check_mode: str = "panel"
     cpa_auto_check_remove_401: bool = False
     cpa_auto_check_remove_401_interval: int = 3
     cpa_auto_check_interval: int = 60

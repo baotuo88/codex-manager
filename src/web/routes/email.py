@@ -206,6 +206,7 @@ async def get_service_types():
                     {"name": "admin_password", "label": "Admin 密码", "required": True, "secret": True},
                     {"name": "domain", "label": "邮箱域名", "required": True, "placeholder": "example.com"},
                     {"name": "enable_prefix", "label": "启用前缀", "required": False, "default": True},
+                    {"name": "site_password", "label": "站点密码(x-custom-auth)", "required": False, "secret": True},
                 ]
             },
             {
