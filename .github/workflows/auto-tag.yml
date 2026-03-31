@@ -3,6 +3,7 @@ name: 自动创建 Tag
 on:
   push:
     branches:
+      - master
       - main
   workflow_dispatch:
 
