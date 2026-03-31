@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 v1.0.0)'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -48,3 +53,110 @@ jobs:
           name: ${{ matrix.asset_name }}
           path: dist/${{ matrix.artifact_name }}
           if-no-files-found: error
+
+  release:
+    name: 创建发布
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码（获取附加文件）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 解析发布版本
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ github.event.inputs.version }}"
+          fi
+          tag=$(echo "$tag" | tr -d '\r' | tr -d '\n')
+          if [ -z "$tag" ] || [ "$tag" = "dev" ]; then
+            echo "version 输入不能为空"
+            exit 1
+          fi
+          if [[ "$tag" != v* ]]; then
+            tag="v$tag"
+          fi
+          if ! git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "tag 不存在: $tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: 写入版本文件
+        run: echo "${{ steps.release_tag.outputs.tag }}" > VERSION
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: 整理文件并打包 zip
+        run: |
+          mkdir -p release
+          # 为每个平台二进制文件打包成 zip
+          find dist/ -type f | while read f; do
+            name=$(basename "$f")
+            # 根据文件名确定平台标识
+            case "$name" in
+              *windows*) platform=$(echo "$name" | sed 's/\.[^.]*$//') ;;
+              *linux*)   platform="$name" ;;
+              *macos*)   platform="$name" ;;
+              *)         platform="$name" ;;
+            esac
+            tmpdir="tmp_${platform}"
+            mkdir -p "$tmpdir"
+            cp "$f" "$tmpdir/"
+            cp README.md "$tmpdir/README.md"
+            cp .env.example "$tmpdir/.env.example"
+            [ -f VERSION ] && cp VERSION "$tmpdir/VERSION" || true
+            [ -f LICENSE ] && cp LICENSE "$tmpdir/LICENSE" || true
+            cd "$tmpdir"
+            zip -r "../release/${platform}.zip" .
+            cd ..
+            rm -rf "$tmpdir"
+          done
+          ls -lh release/
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: ${{ steps.release_tag.outputs.tag }}
+          files: release/*
+          generate_release_notes: true
+          body: |
+            ## OpenAI 自动注册系统 v2
+
+            ### 下载说明
+            | 平台 | 文件 |
+            |------|------|
+            | Windows x64 | `codex-register-windows-x64.exe` |
+            | Linux x64 | `codex-register-linux-x64` |
+            | macOS ARM64 | `codex-register-macos-arm64` |
+
+            ### 使用方法
+            ```bash
+            # Linux/macOS 需要先赋予执行权限
+            chmod +x codex-register-*
+
+            # 启动 Web UI
+            ./codex-register
+
+            # 指定端口
+            ./codex-register --port 8080
+            
+            # 调试模式（热重载）
+            ./codex-register --debug
+
+            # 设置 Web UI 访问密钥
+            ./codex-register --access-password mypassword
+            ```
