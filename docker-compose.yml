@@ -5,7 +5,7 @@ services:
     build: .
     container_name: codex-manager
     ports:
-      - "8096:8000"
+      - "${APP_HOST_PORT:-18096}:8000"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
