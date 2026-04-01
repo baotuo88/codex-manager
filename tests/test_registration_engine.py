@@ -612,3 +612,78 @@ def test_oauth_exchange_auth_code_visits_oauth_authorize_entry_first():
     code = engine._oauth_exchange_auth_code(session, oauth_start)
 
     assert code == "code-entry-1"
+
+
+def test_oauth_exchange_auth_code_uses_workspace_id_from_consent_html():
+    session = QueueSession([
+        (
+            "GET",
+            "https://auth.example.test/flow/1",
+            DummyResponse(
+                status_code=302,
+                headers={"Location": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent?flow=xyz"},
+            ),
+        ),
+        (
+            "GET",
+            "https://auth.openai.com/sign-in-with-chatgpt/codex/consent?flow=xyz",
+            DummyResponse(
+                status_code=200,
+                text="""
+                <html>
+                  <form method="post" action="/sign-in-with-chatgpt/codex/consent">
+                    <input type="hidden" name="workspace_id" value="ws-from-consent" />
+                    <button type="submit">继续</button>
+                  </form>
+                </html>
+                """,
+                url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent?flow=xyz",
+            ),
+        ),
+        (
+            "POST",
+            OPENAI_API_ENDPOINTS["select_workspace"],
+            DummyResponse(
+                status_code=200,
+                payload={"continue_url": "https://auth.example.test/continue-ws"},
+                text='{"continue_url":"https://auth.example.test/continue-ws"}',
+            ),
+        ),
+        (
+            "GET",
+            "https://auth.example.test/continue-ws",
+            DummyResponse(
+                status_code=302,
+                headers={"Location": "http://localhost:1455/auth/callback?code=code-ws-1&state=state-1"},
+            ),
+        ),
+    ])
+    engine = RegistrationEngine(FakeEmailService(["123456"]))
+    oauth_start = OAuthStart(
+        auth_url="https://auth.example.test/flow/1",
+        state="state-1",
+        code_verifier="verifier-1",
+        redirect_uri="http://localhost:1455/auth/callback",
+    )
+
+    code = engine._oauth_exchange_auth_code(session, oauth_start)
+
+    assert code == "code-ws-1"
+
+
+def test_extract_navigation_url_skips_static_asset_and_prefers_auth_url():
+    engine = RegistrationEngine(FakeEmailService(["123456"]))
+    text = """
+    <html>
+      <link href="https://cdn.openai.com/common/fonts/openai-sans/v2/OpenAISans-Regular.woff2" />
+      <script>
+        const a = "https://cdn.openai.com/assets/app.js";
+        const b = "https://auth.openai.com/oauth/authorize/resume?flow=1";
+      </script>
+    </html>
+    """
+    nav_url = engine._extract_navigation_url_from_html(
+        text,
+        base_url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
+    )
+    assert nav_url == "https://auth.openai.com/oauth/authorize/resume?flow=1"

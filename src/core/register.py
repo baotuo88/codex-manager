@@ -540,10 +540,19 @@ class RegistrationEngine:
         return authorize_url
 
     def authorize(self, url: str) -> str:
-        r = self.session.get(url, headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": f"{self.BASE}/", "Upgrade-Insecure-Requests": "1",
-        }, allow_redirects=True)
+        r = self._request_with_retry(
+            "get",
+            url,
+            label="Authorize",
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Referer": f"{self.BASE}/",
+                "Upgrade-Insecure-Requests": "1",
+            },
+            allow_redirects=True,
+        )
+        if r is None:
+            raise Exception("Authorize 请求失败")
         final_url = str(r.url)
         self._log(f"Authorize -> {r.status_code}")
         return final_url
@@ -973,8 +982,36 @@ class RegistrationEngine:
         if preferred_candidates:
             return preferred_candidates[0]
         if fallback_candidates:
-            return fallback_candidates[0]
+            for candidate in fallback_candidates:
+                try:
+                    parsed = urlparse(candidate)
+                    host = (parsed.netloc or "").lower()
+                    if host in ("auth.openai.com", "localhost", "127.0.0.1"):
+                        return candidate
+                except Exception:
+                    continue
 
+        return None
+
+    def _extract_workspace_id_from_html(self, text: str) -> Optional[str]:
+        """从 consent 页面 HTML 中提取 workspace_id。"""
+        if not text:
+            return None
+        try:
+            patterns = (
+                r'name=["\']workspace_id["\'][^>]*value=["\']([^"\']+)["\']',
+                r'"workspace_id"\s*:\s*"([^"]+)"',
+                r'"workspaceId"\s*:\s*"([^"]+)"',
+            )
+            for pattern in patterns:
+                match = re.search(pattern, text, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                workspace_id = str(html.unescape(match.group(1) or "")).strip()
+                if workspace_id:
+                    return workspace_id
+        except Exception:
+            return None
         return None
 
     def _oauth_submit_authorize_continue_api(
@@ -982,6 +1019,7 @@ class RegistrationEngine:
         session: cffi_requests.Session,
         page_url: str,
         redirect_uri: str,
+        workspace_id_hint: str = "",
     ) -> Optional[str]:
         """Consent 兜底：调用 authorize/continue API 后继续提取 code。"""
         payload_candidates = ({"action": "default"}, {"action": "accept"}, {})
@@ -1038,6 +1076,12 @@ class RegistrationEngine:
                 code = _extract_code_from_url(next_url) or self._oauth_follow_and_extract_code(session, next_url)
                 if code:
                     return code
+            elif workspace_id_hint:
+                ws_continue_url = self._oauth_select_workspace(session, workspace_id_hint)
+                if ws_continue_url:
+                    code = self._oauth_follow_and_extract_code(session, ws_continue_url)
+                    if code:
+                        return code
 
             callback_url = self._extract_redirect_from_html(response_text, redirect_uri)
             if callback_url:
@@ -1141,12 +1185,21 @@ class RegistrationEngine:
             )
 
             self._log(f"Consent 表单提交状态: {resp.status_code}, URL: {str(resp.url)[:120]}...")
+            workspace_id_hint = str(payload.get("workspace_id") or "").strip()
 
             self._raise_if_phone_required(
                 url=str(resp.url),
                 text=resp.text or "",
                 stage="OAuth Consent 提交",
             )
+
+            if resp.status_code == 405 and workspace_id_hint:
+                self._log("Consent 表单返回 405，尝试直接选择 workspace 继续授权", "warning")
+                ws_continue_url = self._oauth_select_workspace(session, workspace_id_hint)
+                if ws_continue_url:
+                    code = self._oauth_follow_and_extract_code(session, ws_continue_url)
+                    if code:
+                        return code
 
             if resp.status_code in (301, 302, 303, 307, 308):
                 loc = resp.headers.get("Location", "")
@@ -1176,6 +1229,7 @@ class RegistrationEngine:
                 session,
                 page_url=page_url,
                 redirect_uri=redirect_uri,
+                workspace_id_hint=workspace_id_hint,
             )
             if api_fallback_code:
                 return api_fallback_code
@@ -1794,6 +1848,10 @@ class RegistrationEngine:
             for page_url in page_candidates:
                 try:
                     response = session.get(page_url, timeout=15)
+                    workspace_id_from_html = self._extract_workspace_id_from_html(response.text or "")
+                    if workspace_id_from_html:
+                        self._log(f"Workspace ID: {workspace_id_from_html} (from html)")
+                        return workspace_id_from_html
                     match = pattern.search(response.text or "")
                     if match:
                         workspace_id = str(match.group(1) or "").strip()
@@ -1939,11 +1997,11 @@ class RegistrationEngine:
                 self._raise_if_phone_required(url=loc, stage="OAuth Authorize 入口(Location)")
                 entry_next = urljoin(oauth_start.auth_url, loc) if loc else ""
                 if entry_next:
+                    auth_code = _extract_code_from_url(entry_next)
                     if "/sign-in-with-chatgpt/codex/consent" in entry_next:
                         consent_url = entry_next
                         self._log(f"OAuth Authorize 入口跳转到 Consent: {consent_url[:120]}...")
-                    auth_code = _extract_code_from_url(entry_next)
-                    if not auth_code:
+                    if not auth_code and "/sign-in-with-chatgpt/codex/consent" not in entry_next:
                         auth_code = self._oauth_follow_and_extract_code(session, entry_next)
             elif resp_entry.status_code == 200:
                 entry_callback = self._extract_redirect_from_html(resp_entry.text or "", oauth_start.redirect_uri)
@@ -1975,12 +2033,19 @@ class RegistrationEngine:
                     self._raise_if_phone_required(url=loc, stage="OAuth Consent(Location)")
                     auth_code = _extract_code_from_url(loc) or self._oauth_follow_and_extract_code(session, loc)
                 elif resp_consent.status_code == 200:
-                    auth_code = self._oauth_submit_consent_form(
-                        session,
-                        page_url=str(resp_consent.url),
-                        html_text=resp_consent.text or "",
-                        redirect_uri=oauth_start.redirect_uri,
-                    )
+                    consent_workspace_id = self._extract_workspace_id_from_html(resp_consent.text or "")
+                    if consent_workspace_id:
+                        self._log(f"Consent 页面提取到 workspace_id: {consent_workspace_id}")
+                        ws_continue_url = self._oauth_select_workspace(session, consent_workspace_id)
+                        if ws_continue_url:
+                            auth_code = self._oauth_follow_and_extract_code(session, ws_continue_url)
+                    if not auth_code:
+                        auth_code = self._oauth_submit_consent_form(
+                            session,
+                            page_url=str(resp_consent.url),
+                            html_text=resp_consent.text or "",
+                            redirect_uri=oauth_start.redirect_uri,
+                        )
             except Exception as e:
                 m = re.search(r"(https?://localhost[^\s'\"]+)", str(e))
                 if m:
