@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
@@ -140,7 +140,11 @@ class CloudMailService(BaseEmailService):
                 ts = float(text)
             else:
                 try:
-                    return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+                    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        # CloudMail 的 createTime 常见为无时区字符串，按 UTC 解释避免错判旧邮件
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.timestamp()
                 except Exception:
                     return None
         if ts > 10_000_000_000:

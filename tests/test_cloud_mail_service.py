@@ -1,4 +1,5 @@
 from src.services.cloud_mail import CloudMailService
+from datetime import datetime, timezone
 
 
 class FakeResponse:
@@ -108,3 +109,32 @@ def test_get_verification_code_skips_cached_message_id_and_uses_next_candidate()
     assert code == "222222"
     assert service._last_message_id_cache[email] == "7002"
     assert service._last_code_cache[email] == "222222"
+
+
+def test_get_verification_code_accepts_naive_utc_create_time_after_otp_sent_at():
+    otp_sent_at = datetime(2026, 4, 1, 18, 43, 48, tzinfo=timezone.utc).timestamp()
+    service = _build_service([
+        FakeResponse(
+            payload={
+                "code": 200,
+                "message": "success",
+                "data": [
+                    {
+                        "emailId": 6115,
+                        "createTime": "2026-04-01 18:43:48",
+                        "subject": "Your ChatGPT code is 095984",
+                    }
+                ],
+            }
+        )
+    ])
+    email = "tester@7thcity.com"
+
+    code = service.get_verification_code(
+        email=email,
+        timeout=2,
+        otp_sent_at=otp_sent_at,
+    )
+
+    assert code == "095984"
+    assert service._last_message_id_cache[email] == "6115"
