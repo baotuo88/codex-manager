@@ -271,6 +271,7 @@
                                     <select id="token-mode" name="token_mode">
                                         <option value="session">Session 提取</option>
                                         <option value="oauth">OAuth 授权（含 refresh_token）</option>
+                                        <option value="browser">有头浏览器注册 (Playwright 推荐)</option>
                                         <option value="auto" selected>自动（优先 OAuth，前10个采样）</option>
                                     </select>
                                     <small style="color: var(--text-muted); font-size: 0.75rem;">自动模式：每轮前 10 个使用 OAuth 采样，成功 &lt; 3 切换 Session；OAuth 失败会回退 Session</small>

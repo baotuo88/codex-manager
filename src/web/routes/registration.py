@@ -123,8 +123,8 @@ def _normalize_email_service_pool(values: Optional[List[str]]) -> List[Tuple[str
 
 def _normalize_token_mode(mode: str) -> str:
     value = (mode or "auto").strip().lower()
-    if value not in ("session", "oauth", "auto"):
-        raise ValueError("Token 获取方式必须为 session / oauth / auto")
+    if value not in ("session", "oauth", "auto", "browser"):
+        raise ValueError("Token 获取方式必须为 session / oauth / auto / browser")
     return value
 
 
@@ -484,15 +484,28 @@ def _run_sync_registration_task(
                 log_callback(f"[邮箱] 使用服务: {label} (ID: {service_id_for_log}, 类型: {service_type.value})")
             else:
                 log_callback(f"[邮箱] 使用服务: {label} (类型: {service_type.value})")
-            log_callback(f"[Token] 获取方式: {'OAuth 授权' if token_mode == 'oauth' else 'Session 提取'}")
+            log_callback(f"[Token] 获取方式: {'OAuth 授权' if token_mode == 'oauth' else '有头浏览器' if token_mode == 'browser' else 'Session 提取'}")
 
-            engine = RegistrationEngine(
-                email_service=email_service,
-                proxy_url=actual_proxy_url,
-                callback_logger=log_callback,
-                task_uuid=task_uuid,
-                token_mode=token_mode,
-            )
+            if token_mode == "browser":
+                try:
+                    from ...core.browser_register import BrowserRegistrationEngine
+                    engine = BrowserRegistrationEngine(
+                        email_service=email_service,
+                        proxy_url=actual_proxy_url,
+                        callback_logger=log_callback,
+                        task_uuid=task_uuid,
+                    )
+                except ImportError as ie:
+                    log_callback(f"[系统] 导入 BrowserRegistrationEngine 失败: {ie}")
+                    raise ValueError("未完整部署浏览器注册引擎依赖")
+            else:
+                engine = RegistrationEngine(
+                    email_service=email_service,
+                    proxy_url=actual_proxy_url,
+                    callback_logger=log_callback,
+                    task_uuid=task_uuid,
+                    token_mode=token_mode,
+                )
 
             # 执行注册
             result = engine.run()

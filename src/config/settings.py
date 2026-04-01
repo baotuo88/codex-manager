@@ -457,7 +457,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         db_key="cpa.auto_register_token_mode",
         default_value="auto",
         category=SettingCategory.CPA,
-        description="自动补充注册的 Token 获取方式（session / oauth / auto）"
+        description="自动补充注册的 Token 获取方式（session / oauth / auto / browser）"
     ),
 
     # 验证码配置
