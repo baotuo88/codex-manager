@@ -93,6 +93,33 @@ class BrowserRegistrationEngine:
                     self._log(f"{label}点击重试失败: {e2}", "warning")
             return False
 
+    def _wait_email_input(self, page, timeout: int = 60000):
+        email_selectors = [
+            "input[type='email']",
+            "input[name='username']",
+            "input[autocomplete='username']",
+            "input[placeholder*='email' i]",
+            "input[placeholder*='电子邮件']",
+            "input[placeholder*='邮箱']",
+        ]
+        page.wait_for_selector(", ".join(email_selectors), timeout=timeout)
+        return email_selectors
+
+    def _fill_email_input(self, page, email: str, selectors):
+        for selector in selectors:
+            loc = page.locator(selector)
+            count = loc.count()
+            for idx in range(count):
+                node = loc.nth(idx)
+                try:
+                    if not node.is_visible() or not node.is_editable():
+                        continue
+                    node.fill(email)
+                    return True
+                except Exception:
+                    continue
+        return False
+
     def _set_hidden_birthday(self, page, value: str) -> bool:
         try:
             page.eval_on_selector(
@@ -565,12 +592,24 @@ class BrowserRegistrationEngine:
                             page.locator('[data-testid="login-button"]').first.click(force=True)
                 except Exception as e:
                     self._log(f"未找到首页按钮或操作异常: {e}", "warning")
-                
-                # 等待输入邮箱的界面
-                page.wait_for_selector("input[type='email']", timeout=60000)
+
+                # 首页入口在无头/Docker 下经常不稳定，直接兜底到 auth 登录页
+                if "auth.openai.com" not in page.url:
+                    self._log("首页入口不稳定，直接跳转 Auth 登录页", "warning")
+                    page.goto("https://auth.openai.com/log-in", wait_until="domcontentloaded", timeout=60000)
+
+                # 等待输入邮箱的界面（兼容不同 DOM 结构）
+                try:
+                    email_selectors = self._wait_email_input(page, timeout=60000)
+                except Exception:
+                    self._log("登录页未出现邮箱输入框，尝试直接打开 create-account", "warning")
+                    page.goto("https://auth.openai.com/create-account", wait_until="domcontentloaded", timeout=60000)
+                    email_selectors = self._wait_email_input(page, timeout=30000)
+
                 self._random_delay(2.0, 4.0)
                 self._log("填写邮箱...")
-                page.fill("input[type='email']", self.email)
+                if not self._fill_email_input(page, self.email, email_selectors):
+                    raise RuntimeError("未找到可编辑的邮箱输入框")
                 self._random_delay(1.0, 2.0)
                 if not self._safe_click(page, "button[type='submit']", refresh_state, "提交邮箱"):
                     self._log("提交邮箱失败，尝试继续流程", "warning")
