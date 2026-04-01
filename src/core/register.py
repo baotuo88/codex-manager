@@ -4,7 +4,6 @@
 加入了 123.py 的模拟浏览器并发注册流程
 """
 
-import os
 import re
 import json
 import time
@@ -62,38 +61,6 @@ _CHROME_PROFILES = [
     },
 ]
 
-# ================= 统一减速配置（与有头浏览器一致） =================
-try:
-    _DELAY_MULTIPLIER = float(os.environ.get("BROWSER_DELAY_MULTIPLIER", "1.0"))
-except Exception:
-    _DELAY_MULTIPLIER = 1.0
-try:
-    _TIMEOUT_MULTIPLIER = float(os.environ.get("BROWSER_TIMEOUT_MULTIPLIER", "1.0"))
-except Exception:
-    _TIMEOUT_MULTIPLIER = 1.0
-try:
-    _DELAY_MIN = float(os.environ.get("BROWSER_DELAY_MIN", "0"))
-except Exception:
-    _DELAY_MIN = 0.0
-try:
-    _DELAY_MAX = float(os.environ.get("BROWSER_DELAY_MAX", "0"))
-except Exception:
-    _DELAY_MAX = 0.0
-
-if _DELAY_MULTIPLIER <= 0:
-    _DELAY_MULTIPLIER = 1.0
-if _TIMEOUT_MULTIPLIER <= 0:
-    _TIMEOUT_MULTIPLIER = 1.0
-
-
-def _scale_timeout(seconds: float) -> float:
-    try:
-        value = float(seconds) * _TIMEOUT_MULTIPLIER
-    except Exception:
-        value = float(seconds)
-    return max(1.0, value)
-
-
 def _random_chrome_version():
     profile = random.choice(_CHROME_PROFILES)
     major = profile["major"]
@@ -105,14 +72,6 @@ def _random_chrome_version():
 
 
 def _random_delay(low=0.3, high=1.0):
-    low = float(low) * _DELAY_MULTIPLIER
-    high = float(high) * _DELAY_MULTIPLIER
-    if _DELAY_MIN > 0:
-        low = max(low, _DELAY_MIN)
-    if _DELAY_MAX > 0:
-        high = min(high, _DELAY_MAX)
-    if high < low:
-        high = low
     time.sleep(random.uniform(low, high))
 
 
@@ -421,7 +380,7 @@ class RegistrationEngine:
         **kwargs: Any,
     ) -> Optional[Response]:
         """带重试的 HTTP 请求封装，防止 curl 超时直接中断流程。"""
-        timeout_val = int(_scale_timeout(timeout or self.request_timeout or 30))
+        timeout_val = int(timeout or self.request_timeout or 30)
         retry_val = int(retries or self.request_retries or 1)
         last_err: Optional[Exception] = None
 
@@ -461,11 +420,10 @@ class RegistrationEngine:
     def wait_for_verification_email(self, timeout=120):
         self._log("等待验证码邮件...")
         email_id = self.email_info.get("service_id") if self.email_info else None
-        scaled_timeout = int(_scale_timeout(timeout))
         code = self.email_service.get_verification_code(
             email=self.email,
             email_id=email_id,
-            timeout=scaled_timeout,
+            timeout=timeout,
             pattern=OTP_CODE_PATTERN,
             otp_sent_at=self._otp_sent_at,
         )
@@ -695,7 +653,7 @@ class RegistrationEngine:
             referer = self._final_callback_url or f"{self.BASE}/"
             r = self.session.get(f"{self.BASE}/api/auth/session", headers={
                 "Accept": "application/json", "Referer": referer, "User-Agent": self.ua,
-            }, timeout=_scale_timeout(30), impersonate=self.impersonate)
+            }, timeout=30, impersonate=self.impersonate)
             if r.status_code != 200: return None
             data = r.json()
             access_token = data.get("accessToken") or data.get("access_token") or ""
@@ -982,7 +940,7 @@ class RegistrationEngine:
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             try:
-                response = session.get(auth_url, timeout=_scale_timeout(20))
+                response = session.get(auth_url, timeout=20)
                 did = session.cookies.get("oai-did")
                 if did:
                     self._log(f"OAuth Device ID: {did}")
@@ -1292,7 +1250,7 @@ class RegistrationEngine:
 
             for i in range(max_redirects):
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
-                response = session.get(current_url, allow_redirects=False, timeout=_scale_timeout(15))
+                response = session.get(current_url, allow_redirects=False, timeout=15)
 
                 location = response.headers.get("Location") or ""
                 if response.status_code not in [301, 302, 303, 307, 308]:
@@ -1324,7 +1282,7 @@ class RegistrationEngine:
             if current_url.startswith("/"):
                 current_url = f"{self.oauth_issuer}{current_url}"
             try:
-                resp = session.get(current_url, allow_redirects=False, timeout=_scale_timeout(15))
+                resp = session.get(current_url, allow_redirects=False, timeout=15)
             except Exception as e:
                 # 有时重定向到 localhost 会触发连接异常，尝试从错误信息里抓 code
                 m = re.search(r"(https?://localhost[^\s'\"]+)", str(e))
@@ -1359,7 +1317,7 @@ class RegistrationEngine:
                 consent_url,
                 headers={"referer": f"{self.oauth_issuer}/log-in"},
                 allow_redirects=False,
-                timeout=_scale_timeout(30),
+                timeout=30,
             )
             if resp_consent.status_code in (301, 302, 303, 307, 308):
                 loc = resp_consent.headers.get("Location", "")
@@ -1382,7 +1340,7 @@ class RegistrationEngine:
                         OPENAI_API_ENDPOINTS["select_workspace"],
                         headers=headers,
                         data=json.dumps({"workspace_id": workspace_id}),
-                        timeout=_scale_timeout(30),
+                        timeout=30,
                         allow_redirects=False,
                     )
                     if resp_ws.status_code in (301, 302, 303, 307, 308):
@@ -1415,7 +1373,7 @@ class RegistrationEngine:
                                         "referer": org_url,
                                         "content-type": "application/json",
                                     },
-                                    timeout=_scale_timeout(30),
+                                    timeout=30,
                                     allow_redirects=False,
                                 )
                                 if resp_org.status_code in (301, 302, 303, 307, 308):
@@ -1441,7 +1399,7 @@ class RegistrationEngine:
                     consent_url,
                     headers={"referer": f"{self.oauth_issuer}/log-in"},
                     allow_redirects=True,
-                    timeout=_scale_timeout(30),
+                    timeout=30,
                 )
                 auth_code = _extract_code_from_url(str(resp_fallback.url))
                 if not auth_code and getattr(resp_fallback, "history", None):

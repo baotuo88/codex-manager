@@ -3,7 +3,6 @@ FROM python:3.10-slim
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
-    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -14,10 +13,6 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright (for headful browser flow)
-RUN pip install --no-cache-dir playwright \
-    && python -m playwright install --with-deps chromium
 
 # Copy application code
 COPY . .

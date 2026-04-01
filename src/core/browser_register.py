@@ -45,29 +45,6 @@ class BrowserRegistrationEngine:
         self.auto_refresh_on_stuck = refresh_flag
         self.skip_oauth = skip_oauth_flag
 
-        # 延迟与超时倍率（用于减速）
-        try:
-            self.delay_multiplier = float(os.environ.get("BROWSER_DELAY_MULTIPLIER", "1.0"))
-        except Exception:
-            self.delay_multiplier = 1.0
-        try:
-            self.timeout_multiplier = float(os.environ.get("BROWSER_TIMEOUT_MULTIPLIER", "1.0"))
-        except Exception:
-            self.timeout_multiplier = 1.0
-        try:
-            self.delay_min = float(os.environ.get("BROWSER_DELAY_MIN", "0"))
-        except Exception:
-            self.delay_min = 0.0
-        try:
-            self.delay_max = float(os.environ.get("BROWSER_DELAY_MAX", "0"))
-        except Exception:
-            self.delay_max = 0.0
-
-        if self.delay_multiplier <= 0:
-            self.delay_multiplier = 1.0
-        if self.timeout_multiplier <= 0:
-            self.timeout_multiplier = 1.0
-
     def _debug_pause(self, page, reason: str):
         if not self.step_pause:
             return
@@ -76,7 +53,7 @@ class BrowserRegistrationEngine:
             page.pause()
         except Exception:
             # 兜底等待，避免阻断逻辑
-            page.wait_for_timeout(self._scale_timeout(30000))
+            page.wait_for_timeout(30000)
 
     def _maybe_refresh(self, page, reason: str, refresh_state: Dict[str, int], limit: int = 2) -> bool:
         if not self.auto_refresh_on_stuck:
@@ -88,21 +65,20 @@ class BrowserRegistrationEngine:
         self._log(f"页面卡住，刷新重试 ({refresh_state['count']}/{limit}): {reason}", "warning")
         try:
             page.reload(wait_until="commit")
-            page.wait_for_timeout(self._scale_timeout(3000))
+            page.wait_for_timeout(3000)
         except Exception as e:
             self._log(f"刷新失败: {e}", "warning")
         return True
 
     def _safe_click(self, page, selector: str, refresh_state: Dict[str, int], label: str, timeout: int = 10000) -> bool:
-        scaled_timeout = self._scale_timeout(timeout)
         try:
-            page.click(selector, timeout=scaled_timeout)
+            page.click(selector, timeout=timeout)
             return True
         except Exception as e:
             self._log(f"{label}点击失败: {e}", "warning")
             if self._maybe_refresh(page, f"{label}点击失败", refresh_state):
                 try:
-                    page.click(selector, timeout=scaled_timeout)
+                    page.click(selector, timeout=timeout)
                     return True
                 except Exception as e2:
                     self._log(f"{label}点击重试失败: {e2}", "warning")
@@ -341,26 +317,7 @@ class BrowserRegistrationEngine:
             self._log(f"创建邮箱失败: {e}", "error")
             return False
             
-    def _scale_timeout(self, ms: int) -> int:
-        """按倍率放大超时时间（毫秒）。"""
-        try:
-            value = int(ms * self.timeout_multiplier)
-        except Exception:
-            value = ms
-        return max(1000, value)
-
     def _random_delay(self, low=0.5, high=2.0):
-        low = float(low) * self.delay_multiplier
-        high = float(high) * self.delay_multiplier
-
-        if self.delay_min > 0:
-            low = max(low, self.delay_min)
-        if self.delay_max > 0:
-            high = min(high, self.delay_max)
-
-        if high < low:
-            high = low
-
         time.sleep(random.uniform(low, high))
 
     def run(self) -> RegistrationResult:
@@ -405,8 +362,6 @@ class BrowserRegistrationEngine:
             )
             context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             page = context.new_page()
-            page.set_default_timeout(self._scale_timeout(30000))
-            page.set_default_navigation_timeout(self._scale_timeout(60000))
             refresh_state = {"count": 0}
             
             try:
