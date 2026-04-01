@@ -431,6 +431,12 @@ class RegistrationEngine:
             "OAUTH_ENABLE_LEGACY_CONSENT_PAYLOADS",
             False,
         )
+        # 是否启用 workspace / authorize-continue 旁路兜底。
+        # 默认关闭：优先遵循真实 Consent「继续 -> 回调」链路，避免误判。
+        self.oauth_enable_workspace_fallback = _env_bool(
+            "OAUTH_ENABLE_WORKSPACE_FALLBACK",
+            False,
+        )
 
     def _log(self, message: str, level: str = "info"):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1767,23 +1773,29 @@ class RegistrationEngine:
                 stage="OAuth Consent 提交",
             )
 
-            if resp.status_code == 405 and workspace_id_hint:
-                self._log("Consent 表单返回 405，尝试直接选择 workspace 继续授权", "warning")
-                ws_continue_url = self._oauth_select_workspace(session, workspace_id_hint)
-                if ws_continue_url:
-                    code = self._oauth_follow_and_extract_code(session, ws_continue_url)
-                    if code:
-                        return code
-                # workspace/select 未拿到 code，再尝试 Consent API 兜底
-                api_fallback_code = self._oauth_submit_authorize_continue_api(
-                    session,
-                    page_url=page_url,
-                    redirect_uri=redirect_uri,
-                    workspace_id_hint=workspace_id_hint,
-                    authorize_url=authorize_url,
-                )
-                if api_fallback_code:
-                    return api_fallback_code
+            if resp.status_code == 405:
+                if self.oauth_enable_workspace_fallback and workspace_id_hint:
+                    self._log("Consent 表单返回 405，尝试 workspace/API 旁路兜底", "warning")
+                    ws_continue_url = self._oauth_select_workspace(session, workspace_id_hint)
+                    if ws_continue_url:
+                        code = self._oauth_follow_and_extract_code(session, ws_continue_url)
+                        if code:
+                            return code
+                    # workspace/select 未拿到 code，再尝试 Consent API 兜底
+                    api_fallback_code = self._oauth_submit_authorize_continue_api(
+                        session,
+                        page_url=page_url,
+                        redirect_uri=redirect_uri,
+                        workspace_id_hint=workspace_id_hint,
+                        authorize_url=authorize_url,
+                    )
+                    if api_fallback_code:
+                        return api_fallback_code
+                else:
+                    self._log(
+                        "Consent 表单返回 405，已禁用 workspace/API 旁路，继续跟随回调链路提取 code",
+                        "warning",
+                    )
 
             if resp.status_code in (301, 302, 303, 307, 308):
                 loc = resp.headers.get("Location", "")
@@ -1813,15 +1825,16 @@ class RegistrationEngine:
             if cookie_code:
                 return cookie_code
 
-            api_fallback_code = self._oauth_submit_authorize_continue_api(
-                session,
-                page_url=page_url,
-                redirect_uri=redirect_uri,
-                workspace_id_hint=workspace_id_hint,
-                authorize_url=authorize_url,
-            )
-            if api_fallback_code:
-                return api_fallback_code
+            if self.oauth_enable_workspace_fallback:
+                api_fallback_code = self._oauth_submit_authorize_continue_api(
+                    session,
+                    page_url=page_url,
+                    redirect_uri=redirect_uri,
+                    workspace_id_hint=workspace_id_hint,
+                    authorize_url=authorize_url,
+                )
+                if api_fallback_code:
+                    return api_fallback_code
 
             # 页面无直接 callback，尝试继续跟随当前 URL
             return self._oauth_follow_and_extract_code(session, str(resp.url))
@@ -3002,7 +3015,7 @@ class RegistrationEngine:
                         redirect_uri=oauth_start.redirect_uri,
                         authorize_url=oauth_start.auth_url,
                     )
-                    if not auth_code:
+                    if not auth_code and self.oauth_enable_workspace_fallback:
                         consent_workspace_id = self._extract_workspace_id_from_html(resp_consent.text or "")
                         if consent_workspace_id:
                             self._log(f"Consent 页面提取到 workspace_id: {consent_workspace_id}")
@@ -3016,13 +3029,26 @@ class RegistrationEngine:
                         )
                         if cookie_code:
                             auth_code = cookie_code
+                    if not auth_code:
+                        # 仍未拿到 code，按真实授权链路继续跟随（不依赖 workspace）。
+                        for candidate_url in (
+                            oauth_start.auth_url,
+                            str(resp_consent.url),
+                            consent_url,
+                        ):
+                            if not candidate_url:
+                                continue
+                            follow_code = self._oauth_follow_and_extract_code(session, candidate_url)
+                            if follow_code:
+                                auth_code = follow_code
+                                break
             except Exception as e:
                 m = re.search(r"(https?://localhost[^\s'\"]+)", str(e))
                 if m:
                     auth_code = _extract_code_from_url(m.group(1))
 
         # 2) 走 workspace / organization 流程（仅在 Consent 表单路径失败后兜底）
-        if not auth_code:
+        if not auth_code and self.oauth_enable_workspace_fallback:
             workspace_id = self._oauth_get_workspace_id(
                 session,
                 consent_url=consent_url,
@@ -3100,6 +3126,8 @@ class RegistrationEngine:
                             auth_code = self._oauth_follow_and_extract_code(session, full_next)
                 except Exception as e:
                     self._log(f"OAuth workspace/organization 处理异常: {e}", "warning")
+        elif not auth_code:
+            self._log("Consent 链路暂未提取到 code，已禁用 workspace/organization 旁路", "warning")
 
         # 3) 最后兜底：允许自动重定向
         if not auth_code:
