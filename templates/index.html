@@ -396,7 +396,6 @@
                                 <div class="scheduler-header">
                                     <label style="font-weight: 500; margin-bottom: 0;">自动监控与注册 (定时 CPA) <span id="cpa-scheduler-status-badge" style="font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; margin-left: 6px;"></span></label>
                                     <div class="scheduler-actions">
-                                        <button type="button" class="btn btn-ghost btn-sm" id="cpa-force-remove-401-btn" style="padding: 2px 8px; font-size: 0.75rem;">⚡ 快速剔除401/403/usage_limit_reached</button>
                                         <button type="button" class="btn btn-ghost btn-sm" id="cpa-force-check-btn" style="padding: 2px 8px; font-size: 0.75rem;">⚡ 强制体检</button>
                                     </div>
                                 </div>
@@ -411,16 +410,6 @@
                                         <option value="panel" selected>面板模式（先用面板状态判定）</option>
                                     </select>
                                 </label>
-                                <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px; padding-left: 24px;">
-                                    <input type="checkbox" id="cpa-auto-remove-401">
-                                    <span>启用独立快速任务：直接剔除 401/403/usage_limit_reached</span>
-                                </label>
-                                <div style="margin-top: 6px; padding-left: 48px; display: grid; grid-template-columns: 1fr; gap: 8px;">
-                                    <div class="form-group">
-                                        <label for="cpa-check-401-interval" style="font-size: 0.8rem; color: var(--text-muted);">401/403/usage_limit_reached 快速剔除间隔 (分钟)</label>
-                                        <input type="number" id="cpa-check-401-interval" min="1" max="1440" value="3" style="padding: 4px 8px; font-size: 0.8rem;">
-                                    </div>
-                                </div>
                                 <div style="margin-top: 6px; padding-left: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
                                     <div class="form-group">
                                         <label for="cpa-test-url" style="font-size: 0.8rem; color: var(--text-muted);">自定义测试 API</label>

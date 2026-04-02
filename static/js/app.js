@@ -103,8 +103,6 @@ const elements = {
     // 定时 CPA
     cpaAutoCheckEnabled: document.getElementById('cpa-auto-check-enabled'),
     cpaCheckMode: document.getElementById('cpa-check-mode'),
-    cpaAutoRemove401: document.getElementById('cpa-auto-remove-401'),
-    cpaCheck401Interval: document.getElementById('cpa-check-401-interval'),
     cpaTestUrl: document.getElementById('cpa-test-url'),
     cpaTestModel: document.getElementById('cpa-test-model'),
     cpaCheckInterval: document.getElementById('cpa-check-interval'),
@@ -117,7 +115,6 @@ const elements = {
     cpaRegisterBatchCount: document.getElementById('cpa-register-batch-count'),
     cpaSaveConfigBtn: document.getElementById('cpa-save-config-btn'),
     cpaStopTaskBtn: document.getElementById('cpa-stop-task-btn'),
-    cpaForceRemove401Btn: document.getElementById('cpa-force-remove-401-btn'),
     cpaForceCheckBtn: document.getElementById('cpa-force-check-btn'),
 };
 
@@ -138,12 +135,12 @@ const CPA_RULE_CONDITION_OPTIONS = [
     { value: 'five_hour_remaining_percent', label: '5小时限额剩余百分比' },
 ];
 const CPA_RULE_OPERATOR_OPTIONS = [
-    { value: 'lt', label: '<' },
-    { value: 'lte', label: '<=' },
-    { value: 'gt', label: '>' },
-    { value: 'gte', label: '>=' },
-    { value: 'eq', label: '=' },
-    { value: 'neq', label: '!=' },
+    { value: 'lt', label: '小于' },
+    { value: 'lte', label: '小于等于' },
+    { value: 'gt', label: '大于' },
+    { value: 'gte', label: '大于等于' },
+    { value: 'eq', label: '等于' },
+    { value: 'neq', label: '不等于' },
 ];
 const CPA_RULE_ACTION_OPTIONS = [
     { value: 'remove', label: '剔除凭证' },
@@ -365,8 +362,6 @@ async function loadSchedulerConfig() {
         const config = await api.get('/scheduler/config');
         if (elements.cpaAutoCheckEnabled) elements.cpaAutoCheckEnabled.checked = config.check_enabled;
         if (elements.cpaCheckMode) elements.cpaCheckMode.value = config.check_mode || 'panel';
-        if (elements.cpaAutoRemove401) elements.cpaAutoRemove401.checked = !!config.check_remove_401;
-        if (elements.cpaCheck401Interval) elements.cpaCheck401Interval.value = config.check_remove_401_interval ?? 3;
         if (elements.cpaTestUrl) elements.cpaTestUrl.value = config.test_url || '';
         if (elements.cpaTestModel) elements.cpaTestModel.value = config.test_model || '';
         if (elements.cpaCheckInterval) elements.cpaCheckInterval.value = config.check_interval;
@@ -787,9 +782,6 @@ function initEventListeners() {
     if (elements.cpaStopTaskBtn) {
         elements.cpaStopTaskBtn.addEventListener('click', handleStopSchedulerTask);
     }
-    if (elements.cpaForceRemove401Btn) {
-        elements.cpaForceRemove401Btn.addEventListener('click', handleForceRemove401Cpa);
-    }
     if (elements.cpaForceCheckBtn) {
         elements.cpaForceCheckBtn.addEventListener('click', handleForceCheckCpa);
     }
@@ -886,8 +878,8 @@ async function handleSaveSchedulerConfig() {
         await api.post('/scheduler/config', {
             check_enabled: elements.cpaAutoCheckEnabled.checked,
             check_mode: elements.cpaCheckMode ? elements.cpaCheckMode.value : 'panel',
-            check_remove_401: elements.cpaAutoRemove401 ? elements.cpaAutoRemove401.checked : false,
-            check_remove_401_interval: elements.cpaCheck401Interval ? (parseInt(elements.cpaCheck401Interval.value) || 3) : 3,
+            check_remove_401: false,
+            check_remove_401_interval: 3,
             check_interval: parseInt(elements.cpaCheckInterval.value) || 60,
             check_sleep: parseInt(elements.cpaCheckSleep.value) || 0,
             check_min_remaining_weekly_percent: parseInt(elements.cpaCheckMinRemainingWeeklyPercent.value) || 0,
@@ -924,8 +916,8 @@ async function handleStopSchedulerTask() {
         await api.post('/scheduler/config', {
             check_enabled: false,
             check_mode: elements.cpaCheckMode ? elements.cpaCheckMode.value : 'panel',
-            check_remove_401: elements.cpaAutoRemove401 ? elements.cpaAutoRemove401.checked : false,
-            check_remove_401_interval: elements.cpaCheck401Interval ? (parseInt(elements.cpaCheck401Interval.value) || 3) : 3,
+            check_remove_401: false,
+            check_remove_401_interval: 3,
             check_interval: parseInt(elements.cpaCheckInterval.value) || 60,
             check_sleep: parseInt(elements.cpaCheckSleep.value) || 0,
             check_min_remaining_weekly_percent: parseInt(elements.cpaCheckMinRemainingWeeklyPercent.value) || 0,
@@ -973,34 +965,6 @@ async function handleForceCheckCpa() {
         addLog('error', '[错误] 后台手动测试触发失败: ' + e.message);
     } finally {
         elements.cpaForceCheckBtn.disabled = false;
-    }
-}
-
-async function handleForceRemove401Cpa() {
-    elements.cpaForceRemove401Btn.disabled = true;
-    addLog('info', '[系统] 🚀 正在发起 401/403/usage_limit_reached 快速剔除 (请稍候)...');
-    try {
-        const res = await api.post('/scheduler/trigger-401');
-        if (res.logs && res.logs.length > 0) {
-            res.logs.forEach(msg => {
-                let level = 'info';
-                if (msg.includes('[WARNING]')) level = 'warning';
-                if (msg.includes('[ERROR]')) level = 'error';
-                addLog(level, msg);
-            });
-        } else {
-            addLog('warning', '[系统] 快速剔除执行完毕，但无日志返回！');
-        }
-        if (res.success) {
-            toast.success(res.message || "401/403/usage_limit_reached 快速剔除执行完毕");
-        } else {
-            toast.error(res.message || "执行中发生错误");
-        }
-    } catch (e) {
-        toast.error("触发失败: " + e.message);
-        addLog('error', '[错误] 401/403/usage_limit_reached 快速剔除触发失败: ' + e.message);
-    } finally {
-        elements.cpaForceRemove401Btn.disabled = false;
     }
 }
 
