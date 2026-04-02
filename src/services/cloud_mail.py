@@ -501,7 +501,11 @@ class CloudMailService(BaseEmailService):
             or email
             or ""
         ).strip()
-        expected_alias = str(email or "").strip().lower()
+        expected_alias = str(
+            self.config.get("receiver_alias_email")
+            or email
+            or ""
+        ).strip().lower()
         alias_filter_enabled = self._is_truthy(self.config.get("receiver_alias_filter", True))
         use_alias_filter = bool(
             alias_filter_enabled

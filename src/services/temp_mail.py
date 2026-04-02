@@ -159,6 +159,27 @@ class TempMailService(BaseEmailService):
             or mail.get("fromAddress")
             or ""
         ).strip()
+        recipient_values: List[str] = []
+        for key in (
+            "to",
+            "toAddress",
+            "to_email",
+            "toEmail",
+            "recipient",
+            "recipients",
+            "address",
+            "delivered_to",
+            "x_original_to",
+        ):
+            value = mail.get(key)
+            if isinstance(value, list):
+                recipient_values.extend(
+                    str(item).strip()
+                    for item in value
+                    if str(item or "").strip()
+                )
+            elif value is not None and str(value).strip():
+                recipient_values.append(str(value).strip())
         subject = str(mail.get("subject") or mail.get("title") or "").strip()
         body_text = str(
             mail.get("text")
@@ -188,6 +209,10 @@ class TempMailService(BaseEmailService):
                 message = message_from_string(raw, policy=email_policy)
                 sender = sender or self._decode_mime_header(message.get("From", ""))
                 subject = subject or self._decode_mime_header(message.get("Subject", ""))
+                for header_name in ("To", "Delivered-To", "X-Original-To"):
+                    header_val = self._decode_mime_header(message.get(header_name, ""))
+                    if header_val:
+                        recipient_values.append(header_val)
                 parsed_body = self._extract_body_from_message(message)
                 if parsed_body:
                     body_text = f"{body_text}\n{parsed_body}".strip() if body_text else parsed_body
@@ -201,6 +226,7 @@ class TempMailService(BaseEmailService):
             "subject": subject,
             "body": body_text,
             "raw": raw,
+            "recipients": " ".join(recipient_values).strip(),
         }
 
     def _extract_mail_id(self, mail: Dict[str, Any]) -> str:
@@ -302,6 +328,14 @@ class TempMailService(BaseEmailService):
         if not text:
             return ""
         return re.sub(EMAIL_ADDRESS_PATTERN, " ", text)
+
+    def _is_truthy(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if not text:
+            return False
+        return text not in {"0", "false", "no", "off", "none", "null"}
 
     def _is_openai_verification_mail(self, sender: str, content: str) -> bool:
         """
@@ -414,7 +448,26 @@ class TempMailService(BaseEmailService):
         Returns:
             验证码字符串，超时返回 None
         """
-        logger.info(f"正在从 TempMail 邮箱 {email} 获取验证码...")
+        query_email = str(self.config.get("inbox_email") or email or "").strip()
+        if not query_email:
+            return None
+        expected_alias = str(
+            self.config.get("receiver_alias_email")
+            or email
+            or ""
+        ).strip().lower()
+        alias_filter_enabled = self._is_truthy(self.config.get("receiver_alias_filter", True))
+        use_alias_filter = bool(
+            alias_filter_enabled
+            and query_email
+            and expected_alias
+            and query_email.lower() != expected_alias
+        )
+        cache_key = f"{query_email}|{expected_alias}" if use_alias_filter else query_email
+        logger.info(
+            f"正在从 TempMail 邮箱 {query_email} 获取验证码..."
+            + (f"（收件人筛选: {expected_alias}）" if use_alias_filter else "")
+        )
 
         start_time = time.time()
         seen_mail_ids: set = set()
@@ -423,13 +476,13 @@ class TempMailService(BaseEmailService):
             for code in (exclude_codes or [])
             if str(code or "").strip()
         }
-        last_code = self._last_code_cache.get(email, "")
+        last_code = self._last_code_cache.get(cache_key, "")
         if last_code:
             excluded.add(last_code)
-        last_message_id = self._last_message_id_cache.get(email, "")
+        last_message_id = self._last_message_id_cache.get(cache_key, "")
 
         # 优先使用地址级 JWT（/api/mails），回退到 admin API
-        cached = self._email_cache.get(email, {})
+        cached = self._email_cache.get(query_email, {}) or self._email_cache.get(email, {})
         jwt = cached.get("jwt")
 
         while time.time() - start_time < timeout:
@@ -445,7 +498,7 @@ class TempMailService(BaseEmailService):
                     response = self._make_request(
                         "GET",
                         "/admin/mails",
-                        params={"limit": 20, "offset": 0, "address": email},
+                        params={"limit": 20, "offset": 0, "address": query_email},
                     )
 
                 # /user_api/mails 和 /admin/mails 返回格式相同: {"results": [...], "total": N}
@@ -468,6 +521,9 @@ class TempMailService(BaseEmailService):
                     subject = parsed["subject"]
                     body_text = parsed["body"]
                     raw_text = parsed["raw"]
+                    recipients_text = str(parsed.get("recipients") or "").lower()
+                    if use_alias_filter and expected_alias not in recipients_text:
+                        continue
                     content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
                     safe_content = self._strip_email_addresses(content)
 
@@ -480,10 +536,13 @@ class TempMailService(BaseEmailService):
                         code = match.group(1)
                         if code in excluded:
                             continue
-                        self._last_code_cache[email] = code
+                        self._last_code_cache[cache_key] = code
                         if mail_id:
-                            self._last_message_id_cache[email] = mail_id
-                        logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
+                            self._last_message_id_cache[cache_key] = mail_id
+                        logger.info(
+                            f"从 TempMail 邮箱 {query_email} 找到验证码: {code}"
+                            + (f"（收件人筛选: {expected_alias}）" if use_alias_filter else "")
+                        )
                         self.update_status(True)
                         return code
 
@@ -495,7 +554,10 @@ class TempMailService(BaseEmailService):
 
             time.sleep(3)
 
-        logger.warning(f"等待 TempMail 验证码超时: {email}")
+        logger.warning(
+            f"等待 TempMail 验证码超时: {query_email}"
+            + (f"（收件人筛选: {expected_alias}）" if use_alias_filter else "")
+        )
         return None
 
     def list_emails(self, limit: int = 100, offset: int = 0, **kwargs) -> List[Dict[str, Any]]:
@@ -572,6 +634,13 @@ class TempMailService(BaseEmailService):
             self._email_cache.pop(address, None)
             self._last_code_cache.pop(address, None)
             self._last_message_id_cache.pop(address, None)
+            alias_cache_keys = [
+                key for key in list(self._last_code_cache.keys())
+                if key.startswith(f"{address}|")
+            ]
+            for key in alias_cache_keys:
+                self._last_code_cache.pop(key, None)
+                self._last_message_id_cache.pop(key, None)
             removed = True
 
         if removed:

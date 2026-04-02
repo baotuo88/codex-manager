@@ -695,7 +695,7 @@ def _extract_item_status_for_rule(item: dict) -> str:
 def _extract_plan_type_from_payload(payload: Any) -> Optional[str]:
     data = _decode_possible_json_payload(payload)
     if isinstance(data, dict):
-        for key in (
+        plan_keys = (
             "plan",
             "plan_type",
             "planType",
@@ -706,19 +706,64 @@ def _extract_plan_type_from_payload(payload: Any) -> Optional[str]:
             "account_plan",
             "account_type",
             "chatgpt_plan",
+        )
+        for key in (
+            *plan_keys,
         ):
             value = data.get(key)
             if value:
                 return _normalize_plan_value(value)
-        for key in ("subscription", "metadata", "meta", "profile", "account", "auth", "payload", "json", "data"):
+
+        preferred_nested_keys = (
+            "subscription",
+            "metadata",
+            "meta",
+            "profile",
+            "account",
+            "auth",
+            "payload",
+            "json",
+            "data",
+            "error",
+            "response",
+            "body",
+            "result",
+            "details",
+            "status_message",
+        )
+        for key in preferred_nested_keys:
             nested = _extract_plan_type_from_payload(data.get(key))
             if nested:
                 return nested
+
+        # 兜底扫描剩余嵌套字段（例如 error.plan_type），避免计划类型被漏掉。
+        skip_keys = set(plan_keys) | set(preferred_nested_keys)
+        for key, value in data.items():
+            if key in skip_keys:
+                continue
+            if isinstance(value, (dict, list, str)):
+                nested = _extract_plan_type_from_payload(value)
+                if nested:
+                    return nested
     elif isinstance(data, list):
         for entry in data:
             nested = _extract_plan_type_from_payload(entry)
             if nested:
                 return nested
+    return None
+
+
+def _extract_plan_type_from_name(name: Any) -> Optional[str]:
+    text = str(name or "").strip().lower()
+    if not text:
+        return None
+    # 常见格式: xxx-team.json / xxx_plus_xxx / xxx.pro.xxx
+    match = re.search(r"(?:^|[-_.@])(free|plus|team|pro|unknown)(?:[-_.@]|\.json$|$)", text)
+    if match:
+        return _normalize_plan_value(match.group(1))
+    for plan in ("free", "plus", "team", "pro", "unknown"):
+        if plan in text:
+            return _normalize_plan_value(plan)
     return None
 
 
@@ -742,6 +787,11 @@ def _extract_item_plan_type(item: dict) -> str:
     payload_plan = _extract_plan_type_from_payload(payload)
     if payload_plan:
         return payload_plan
+
+    for key in ("name", "filename", "file_name", "auth_file_name"):
+        name_plan = _extract_plan_type_from_name(item.get(key))
+        if name_plan:
+            return name_plan
 
     return "unknown"
 
@@ -1362,15 +1412,15 @@ def _trigger_auto_registration_if_needed(main_loop, svc, available_count: int, s
         _log(f"调度自动注册任务失败: {e}", "error")
 
 
-def _apply_policy_action(rule: dict, item: dict, svc, _log) -> tuple[bool, bool]:
+def _apply_policy_action(rule: dict, item: dict, svc, _log) -> tuple[bool, bool, bool]:
     """
     执行动作。
-    返回: (执行成功, 是否已删除文件)
+    返回: (执行成功, 是否已删除文件, 是否产生状态变化)
     """
     name = str(item.get("name", "")).strip()
     if not name:
         _log("命中规则但凭证缺少 name，已跳过动作执行", "warning")
-        return False, False
+        return False, False, False
 
     action = rule.get("action", "remove")
     rule_name = rule.get("name") or rule.get("id") or "unnamed_rule"
@@ -1379,17 +1429,17 @@ def _apply_policy_action(rule: dict, item: dict, svc, _log) -> tuple[bool, bool]
         try:
             delete_cliproxy_auth_file(name, svc.api_url, svc.api_token)
             _log(f"策略动作[剔除] 成功: {name} (规则: {rule_name})", "warning")
-            return True, True
+            return True, True, True
         except Exception as e:
             _log(f"策略动作[剔除] 失败: {name} ({e})", "error")
-            return False, False
+            return False, False, False
 
     target_enabled = action == "enable"
     current_status = _extract_item_status_for_rule(item)
     desired_status = "enabled" if target_enabled else "disabled"
     if current_status == desired_status:
         _log(f"策略动作[{action}] 跳过: {name} 已是 {desired_status}", "info")
-        return True, False
+        return True, False, False
 
     ok, msg = set_cliproxy_auth_file_enabled(
         item=item,
@@ -1400,12 +1450,12 @@ def _apply_policy_action(rule: dict, item: dict, svc, _log) -> tuple[bool, bool]
     )
     if not ok:
         _log(f"策略动作[{action}] 失败: {name} ({msg})", "error")
-        return False, False
+        return False, False, False
 
     item["status"] = desired_status
     item["enabled"] = target_enabled
     _log(f"策略动作[{action}] 成功: {name} ({msg})", "warning")
-    return True, False
+    return True, False, True
 
 
 def _match_invalid_rule(rule: dict, item: dict, plan_type: str, item_status: str, invalid_reason: Optional[str]) -> bool:
@@ -1454,12 +1504,31 @@ def _match_quota_rule(rule: dict, item: dict, plan_type: str, item_status: str, 
     return matched, float(metric_value), metric_label
 
 
-def _apply_invalid_rules_for_service(svc, files: List[dict], invalid_rules: List[dict], check_mode: str, settings, _log) -> List[dict]:
+def _apply_invalid_rules_for_service(
+    svc,
+    files: List[dict],
+    invalid_rules: List[dict],
+    check_mode: str,
+    settings,
+    _log,
+) -> tuple[List[dict], dict]:
+    stats = {
+        "input_total": len(files or []),
+        "processed": 0,
+        "with_signal": 0,
+        "rule_matched": 0,
+        "rule_unmatched": 0,
+        "action_success": 0,
+        "action_failed": 0,
+        "removed": 0,
+        "status_changed": 0,
+        "status_noop": 0,
+    }
     if not files:
-        return files
+        return files, stats
     if not invalid_rules:
         _log("未配置失效策略规则，任务A已跳过。")
-        return files
+        return files, stats
 
     remaining_files: List[dict] = []
     for item in files:
@@ -1467,6 +1536,7 @@ def _apply_invalid_rules_for_service(svc, files: List[dict], invalid_rules: List
             _consume_abort_check()
             _log("检测任务收到中止请求，终止失效策略任务并准备重启。", "warning")
             break
+        stats["processed"] += 1
 
         name = str(item.get("name", "")).strip() or "<unknown>"
         plan_type = _extract_item_plan_type(item)
@@ -1491,6 +1561,7 @@ def _apply_invalid_rules_for_service(svc, files: List[dict], invalid_rules: List
             remaining_files.append(item)
             continue
 
+        stats["with_signal"] += 1
         matched_rule = None
         for rule in invalid_rules:
             if _match_invalid_rule(rule, item, plan_type, item_status, invalid_reason):
@@ -1498,6 +1569,7 @@ def _apply_invalid_rules_for_service(svc, files: List[dict], invalid_rules: List
                 break
 
         if not matched_rule:
+            stats["rule_unmatched"] += 1
             _log(
                 f"失效信号未命中策略，保留凭证: {name} (套餐: {plan_type}, 状态: {item_status}, 原因: {invalid_reason})",
                 "warning",
@@ -1505,24 +1577,54 @@ def _apply_invalid_rules_for_service(svc, files: List[dict], invalid_rules: List
             remaining_files.append(item)
             continue
 
+        stats["rule_matched"] += 1
         rule_name = matched_rule.get("name") or matched_rule.get("id") or "unnamed_rule"
         _log(
             f"命中失效策略: {name} (规则: {rule_name}, 套餐: {plan_type}, 状态: {item_status}, 原因: {invalid_reason})",
             "warning",
         )
-        _ok, removed = _apply_policy_action(matched_rule, item, svc, _log)
+        _ok, removed, changed = _apply_policy_action(matched_rule, item, svc, _log)
+        if _ok:
+            stats["action_success"] += 1
+        else:
+            stats["action_failed"] += 1
+        if removed:
+            stats["removed"] += 1
+        if changed:
+            stats["status_changed"] += 1
+        elif _ok and matched_rule.get("action") in {"enable", "disable"}:
+            stats["status_noop"] += 1
         if not removed:
             remaining_files.append(item)
 
-    return remaining_files
+    return remaining_files, stats
 
 
-def _apply_quota_rules_for_service(svc, files: List[dict], quota_rules: List[dict], settings, _log) -> List[dict]:
+def _apply_quota_rules_for_service(
+    svc,
+    files: List[dict],
+    quota_rules: List[dict],
+    settings,
+    _log,
+) -> tuple[List[dict], dict]:
+    stats = {
+        "input_total": len(files or []),
+        "processed": 0,
+        "candidate_filtered_out": 0,
+        "rule_matched": 0,
+        "rule_unmatched": 0,
+        "action_success": 0,
+        "action_failed": 0,
+        "removed": 0,
+        "status_changed": 0,
+        "status_noop": 0,
+        "usage_limit_forced_zero": 0,
+    }
     if not files:
-        return files
+        return files, stats
     if not quota_rules:
         _log("未配置限额策略规则，任务B已跳过。")
-        return files
+        return files, stats
 
     remaining_files: List[dict] = []
     for item in files:
@@ -1530,6 +1632,7 @@ def _apply_quota_rules_for_service(svc, files: List[dict], quota_rules: List[dic
             _consume_abort_check()
             _log("检测任务收到中止请求，终止限额策略任务并准备重启。", "warning")
             break
+        stats["processed"] += 1
 
         name = str(item.get("name", "")).strip() or "<unknown>"
         plan_type = _extract_item_plan_type(item)
@@ -1541,6 +1644,7 @@ def _apply_quota_rules_for_service(svc, files: List[dict], quota_rules: List[dic
             if _is_rule_plan_match(rule, plan_type) and _is_rule_status_match(rule, item_status)
         ]
         if not candidate_rules:
+            stats["candidate_filtered_out"] += 1
             remaining_files.append(item)
             continue
 
@@ -1549,6 +1653,7 @@ def _apply_quota_rules_for_service(svc, files: List[dict], quota_rules: List[dic
         probe_result = probe_cliproxy_auth_file(item, svc.api_url, svc.api_token)
         quota = probe_result.get("quota") or {}
         if _is_usage_limit_reached_text(probe_result.get("failure_reason")):
+            stats["usage_limit_forced_zero"] += 1
             _log(f"检测到 usage_limit_reached，按额度耗尽(0%)处理: {name}", "warning")
 
         matched_rule = None
@@ -1563,20 +1668,32 @@ def _apply_quota_rules_for_service(svc, files: List[dict], quota_rules: List[dic
                 break
 
         if not matched_rule:
+            stats["rule_unmatched"] += 1
             remaining_files.append(item)
             continue
 
+        stats["rule_matched"] += 1
         rule_name = matched_rule.get("name") or matched_rule.get("id") or "unnamed_rule"
         metric_text = _format_percent(matched_metric_value) if matched_metric_value is not None else "N/A"
         _log(
             f"命中限额策略: {name} (规则: {rule_name}, 套餐: {plan_type}, 状态: {item_status}, {matched_metric_label}: {metric_text}%)",
             "warning",
         )
-        _ok, removed = _apply_policy_action(matched_rule, item, svc, _log)
+        _ok, removed, changed = _apply_policy_action(matched_rule, item, svc, _log)
+        if _ok:
+            stats["action_success"] += 1
+        else:
+            stats["action_failed"] += 1
+        if removed:
+            stats["removed"] += 1
+        if changed:
+            stats["status_changed"] += 1
+        elif _ok and matched_rule.get("action") in {"enable", "disable"}:
+            stats["status_noop"] += 1
         if not removed:
             remaining_files.append(item)
 
-    return remaining_files
+    return remaining_files, stats
 
 
 def check_cpa_services_job(
@@ -1666,9 +1783,10 @@ def check_cpa_services_job(
                                 check_mode = "panel"
 
                             _log(
-                                f"任务A/失效检测开始（模式: {check_mode}，处理范围: Codex 凭证，共 {len(files)} 个）"
+                                "任务A/失效检测开始（任务A=失效规则组，不是规则编号）: "
+                                f"模式={check_mode}, 生效规则={len(invalid_rules)}条, 处理范围=Codex {len(files)}个"
                             )
-                            files_after_invalid = _apply_invalid_rules_for_service(
+                            files_after_invalid, invalid_stats = _apply_invalid_rules_for_service(
                                 svc=svc,
                                 files=files,
                                 invalid_rules=invalid_rules,
@@ -1678,14 +1796,22 @@ def check_cpa_services_job(
                             )
                             _log(
                                 "任务A/失效检测完成（仅统计 Codex 处理中的数量，非服务全量）: "
-                                f"处理前={len(files)}, 处理后={len(files_after_invalid)}"
+                                f"处理前={len(files)}, 处理后={len(files_after_invalid)}, "
+                                f"有信号={invalid_stats.get('with_signal', 0)}, "
+                                f"命中规则={invalid_stats.get('rule_matched', 0)}, "
+                                f"未命中规则={invalid_stats.get('rule_unmatched', 0)}, "
+                                f"动作成功={invalid_stats.get('action_success', 0)}, "
+                                f"动作失败={invalid_stats.get('action_failed', 0)}, "
+                                f"剔除={invalid_stats.get('removed', 0)}, "
+                                f"状态变更(启用/禁用)={invalid_stats.get('status_changed', 0)}, "
+                                f"状态已满足跳过={invalid_stats.get('status_noop', 0)}"
                             )
 
                             _log(
-                                "任务B/限额策略开始（承接任务A输出，仍仅处理 Codex）: "
-                                f"处理中的数量={len(files_after_invalid)}"
+                                "任务B/限额策略开始（任务B=限额规则组，不是规则编号）: "
+                                f"生效规则={len(quota_rules)}条, 承接数量={len(files_after_invalid)}"
                             )
-                            files_after_quota = _apply_quota_rules_for_service(
+                            files_after_quota, quota_stats = _apply_quota_rules_for_service(
                                 svc=svc,
                                 files=files_after_invalid,
                                 quota_rules=quota_rules,
@@ -1694,7 +1820,16 @@ def check_cpa_services_job(
                             )
                             _log(
                                 "任务B/限额策略完成（仅统计 Codex 处理中的数量，非服务全量）: "
-                                f"处理前={len(files_after_invalid)}, 处理后={len(files_after_quota)}"
+                                f"处理前={len(files_after_invalid)}, 处理后={len(files_after_quota)}, "
+                                f"候选规则过滤后跳过={quota_stats.get('candidate_filtered_out', 0)}, "
+                                f"命中规则={quota_stats.get('rule_matched', 0)}, "
+                                f"未命中规则={quota_stats.get('rule_unmatched', 0)}, "
+                                f"动作成功={quota_stats.get('action_success', 0)}, "
+                                f"动作失败={quota_stats.get('action_failed', 0)}, "
+                                f"剔除={quota_stats.get('removed', 0)}, "
+                                f"状态变更(启用/禁用)={quota_stats.get('status_changed', 0)}, "
+                                f"状态已满足跳过={quota_stats.get('status_noop', 0)}, "
+                                f"usage_limit_reached按0%处理={quota_stats.get('usage_limit_forced_zero', 0)}"
                             )
                         else:
                             _log("体检开关关闭，跳过失效/限额策略，仅保留数量监控。")

@@ -341,8 +341,28 @@ class DuckMailService(BaseEmailService):
             logger.warning("Duck 官方模式未配置收件后端，无法获取验证码")
             return None
 
+        # Duck 官方链路拆分为两层：
+        # 1) query_email: 后端实际拉取的固定收件箱（如 abc@qq.com）
+        # 2) receiver_alias_email: 目标 Duck 临时别名（用于收件人过滤）
+        receiver_inbox_email = str(self.config.get("receiver_inbox_email") or "").strip()
+        query_email = receiver_inbox_email or email
+        receiver_alias_email = str(email or "").strip().lower()
+
+        receiver_config = getattr(self._receiver_service, "config", None)
+        old_alias_email = None
+        old_alias_filter = None
+        old_alias_email_exists = False
+        old_alias_filter_exists = False
+        if isinstance(receiver_config, dict):
+            old_alias_email_exists = "receiver_alias_email" in receiver_config
+            old_alias_filter_exists = "receiver_alias_filter" in receiver_config
+            old_alias_email = receiver_config.get("receiver_alias_email")
+            old_alias_filter = receiver_config.get("receiver_alias_filter")
+            receiver_config["receiver_alias_email"] = receiver_alias_email
+            receiver_config.setdefault("receiver_alias_filter", True)
+
         kwargs = {
-            "email": email,
+            "email": query_email,
             "email_id": email_id,
             "timeout": timeout,
             "pattern": pattern,
@@ -364,6 +384,17 @@ class DuckMailService(BaseEmailService):
             logger.warning("Duck 收件后端获取验证码失败: %s", exc)
             self.update_status(False, exc)
             return None
+        finally:
+            if isinstance(receiver_config, dict):
+                if old_alias_email_exists:
+                    receiver_config["receiver_alias_email"] = old_alias_email
+                else:
+                    receiver_config.pop("receiver_alias_email", None)
+
+                if old_alias_filter_exists:
+                    receiver_config["receiver_alias_filter"] = old_alias_filter
+                else:
+                    receiver_config.pop("receiver_alias_filter", None)
 
     def _resolve_domains(self, config: Dict[str, Any]) -> List[str]:
         domains = parse_domain_list(config.get("domain"))
