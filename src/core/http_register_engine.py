@@ -872,7 +872,7 @@ class RegistrationEngine:
             return False
 
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
-        """检查 IP 地理位置（对齐 any-auto-register 流程）。"""
+        """检查 IP 地理位置（统一 HTTP OAuth 流程）。"""
         client = None
         try:
             client = OpenAIHTTPClient(proxy_url=self.proxy_url)
@@ -990,7 +990,7 @@ class RegistrationEngine:
         return oauth_start, did, sen_token
 
     def _register_password_simple(self) -> bool:
-        """提交注册密码（对齐 any-auto-register 最小请求头）。"""
+        """提交注册密码（使用精简请求头）。"""
         try:
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["register"],
@@ -1010,7 +1010,7 @@ class RegistrationEngine:
             return False
 
     def _send_verification_code_simple(self) -> bool:
-        """发送验证码（对齐 any-auto-register 最小请求头）。"""
+        """发送验证码（使用精简请求头）。"""
         try:
             self._otp_sent_at = time.time()
             response = self.session.get(
@@ -1027,7 +1027,7 @@ class RegistrationEngine:
             return False
 
     def _validate_verification_code_simple(self, code: str) -> bool:
-        """校验验证码（对齐 any-auto-register 最小请求头）。"""
+        """校验验证码（使用精简请求头）。"""
         try:
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
@@ -1080,7 +1080,7 @@ class RegistrationEngine:
         return True, ""
 
     def _run_full_oauth_registration(self) -> RegistrationResult:
-        """按 any-auto-register 逻辑执行全程 HTTP OAuth 注册。"""
+        """执行全程 HTTP OAuth 注册流程。"""
         result = RegistrationResult(success=False, logs=self.logs)
         self._used_verification_codes.clear()
         self._otp_sent_at = None
@@ -4586,7 +4586,7 @@ class RegistrationEngine:
                             status, data = self.validate_otp(otp_code, sentinel_token)
                         if status != 200: raise Exception("OTP验证反复失败")
 
-            # 继续流程：创建账号（对齐 any-auto-register 逻辑）
+            # 继续流程：创建账号
             if not account_created:
                 self._log("创建用户账户...")
                 _random_delay(0.4, 0.9)
